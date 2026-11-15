@@ -51,73 +51,76 @@ func (a *Agent) saveProcess(t protocol.TaskEnvelope, ready runnerReady, spec run
 }
 func (a *Agent) tailLogs(t protocol.TaskEnvelope, dir string, final ...bool) error {
 	for _, stream := range []string{"stdout", "stderr"} {
-		column := stream + "_offset"
-		for chunk := 0; chunk < 16; chunk++ {
-			a.mu.Lock()
-			var offset int64
-			e := a.db.QueryRow(`SELECT `+column+` FROM local_task_ledger WHERE id=?`, t.TaskID).Scan(&offset)
-			a.mu.Unlock()
-			if e != nil {
-				return e
-			}
-			file, e := os.Open(filepath.Join(dir, stream+".log"))
-			if os.IsNotExist(e) {
-				break
-			}
-			if e != nil {
-				return e
-			}
-			buffer := make([]byte, 4096+utf8.UTFMax-1)
-			n, readErr := file.ReadAt(buffer, offset)
-			file.Close()
-			if readErr != nil && readErr != io.EOF {
-				return readErr
-			}
-			if n == 0 {
-				break
-			}
-			count := n
-			if count > 4096 {
-				count = 4096
-			}
-			start := count - 1
-			for start > 0 && !utf8.RuneStart(buffer[start]) && count-start < utf8.UTFMax {
-				start--
-			}
-			_, size := utf8.DecodeRune(buffer[start:n])
-			if start+size > count {
-				count = start
-			}
-			if (len(final) == 0 || !final[0]) && !utf8.FullRune(buffer[start:count]) {
-				count = start
-			}
-			if count == 0 {
-				break
-			}
-			n = count
-
-			a.mu.Lock()
-			tx, e := a.db.Begin()
-			if e == nil {
-				e = appendEvent(tx, a.cfg.DeviceID, t, "task.log", protocol.EventPayload{Stream: stream, Offset: offset, Length: int64(n), Text: string(buffer[:n]), Data: buffer[:n]}, "running")
-				if e == nil {
-					_, e = tx.Exec(`UPDATE local_task_ledger SET `+column+`=? WHERE id=?`, offset+int64(n), t.TaskID)
-				}
-				if e == nil {
-					e = tx.Commit()
-				}
-				tx.Rollback()
-			}
-			a.mu.Unlock()
-			if e != nil {
-				return e
-			}
-			if readErr == io.EOF && a.logsDrained(t, dir) {
-				break
-			}
+		if e := a.tailStream(t, dir, stream, len(final) > 0 && final[0]); e != nil {
+			return e
 		}
 	}
 	return nil
+}
+
+func (a *Agent) tailStream(t protocol.TaskEnvelope, dir, stream string, final bool) error {
+	file, e := os.Open(filepath.Join(dir, stream+".log"))
+	if os.IsNotExist(e) {
+		return nil
+	}
+	if e != nil {
+		return e
+	}
+	defer file.Close()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	tx, e := a.db.Begin()
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	column := stream + "_offset"
+	var offset int64
+	if e = tx.QueryRow(`SELECT `+column+` FROM local_task_ledger WHERE id=?`, t.TaskID).Scan(&offset); e != nil {
+		return e
+	}
+	initial := offset
+	buffer := make([]byte, 4096+utf8.UTFMax-1)
+	// A bounded batch keeps event/offset atomicity while avoiding one durable
+	// SQLite commit per 4 KiB (especially costly on Windows).
+	for chunk := 0; chunk < 16; chunk++ {
+		n, readErr := file.ReadAt(buffer, offset)
+		if readErr != nil && readErr != io.EOF {
+			return readErr
+		}
+		if n == 0 {
+			break
+		}
+		count := n
+		if count > 4096 {
+			count = 4096
+		}
+		start := count - 1
+		for start > 0 && !utf8.RuneStart(buffer[start]) && count-start < utf8.UTFMax {
+			start--
+		}
+		_, size := utf8.DecodeRune(buffer[start:n])
+		if start+size > count {
+			count = start
+		}
+		if !final && !utf8.FullRune(buffer[start:count]) {
+			count = start
+		}
+		if count == 0 {
+			break
+		}
+		if e = appendEvent(tx, a.cfg.DeviceID, t, "task.log", protocol.EventPayload{Stream: stream, Offset: offset, Length: int64(count), Text: string(buffer[:count]), Data: buffer[:count]}, "running"); e != nil {
+			return e
+		}
+		offset += int64(count)
+	}
+	if offset == initial {
+		return nil
+	}
+	if _, e = tx.Exec(`UPDATE local_task_ledger SET `+column+`=? WHERE id=?`, offset, t.TaskID); e != nil {
+		return e
+	}
+	return tx.Commit()
 }
 func (a *Agent) canResumeProcess(t protocol.TaskEnvelope) bool {
 	var spec runnerSpec

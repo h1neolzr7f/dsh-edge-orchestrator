@@ -95,3 +95,20 @@ func TestLogChunkPreservesUTF8Boundary(t *testing.T) {
 		t.Fatalf("UTF-8 corrupted near boundary: %q", got[len(got)-12:])
 	}
 }
+
+func TestDataDirectoryUsesCanonicalPath(t *testing.T) {
+	root := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	if e := os.Symlink(root, alias); e != nil {
+		t.Skipf("directory symlink unavailable: %v", e)
+	}
+	cfg := Config{DBPath: filepath.Join(alias, "a.db"), Workspaces: map[string]string{"workspace/project": root}}
+	data, _, e := configureLocal(&cfg)
+	if e != nil {
+		t.Fatal(e)
+	}
+	real, _ := filepath.EvalSymlinks(root)
+	if data != real {
+		t.Fatalf("task directory uses unresolved alias: %q != %q", data, real)
+	}
+}

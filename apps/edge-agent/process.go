@@ -149,7 +149,7 @@ func (a *Agent) runProcess(ctx context.Context, t protocol.TaskEnvelope) (json.R
 			if result.Nonce != spec.Nonce || result.Identity != ready.Identity {
 				return nil, protocol.Err("interrupted_by_restart", "exit status identity mismatch")
 			}
-			if !treeBusy(ready.Identity, spec.JobName) {
+			if !treeBusy(ready.Identity, spec.JobName) && !sameProcess(ready.Identity) {
 				if e := a.tailLogs(t, dir, true); e != nil {
 					return nil, e
 				}

@@ -79,6 +79,9 @@ func TestReadyRunnerHandshakeResumesAfterRestart(t *testing.T) {
 	if e != nil || !strings.Contains(string(result), "go version") {
 		t.Fatalf("ready runner never released after restart: %s %v", result, e)
 	}
+	if sameProcess(ready.Identity) {
+		t.Fatal("process result returned while its runner is still alive")
+	}
 	if n, _ := a.ExecutionCount(task.TaskID); n != 1 {
 		t.Fatal("handshake reran task")
 	}

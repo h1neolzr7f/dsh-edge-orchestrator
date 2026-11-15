@@ -27,6 +27,12 @@ func configureLocal(cfg *Config) (string, map[string]string, error) {
 	if e != nil {
 		return "", nil, e
 	}
+	// Windows temporary paths may use an 8.3 alias while EvalSymlinks returns
+	// its long spelling. Keep task worktrees and authorized roots canonical.
+	data, e = filepath.EvalSymlinks(data)
+	if e != nil {
+		return "", nil, e
+	}
 	if len(cfg.Workspaces) == 0 {
 		root := filepath.Join(data, "workspaces", "default")
 		cfg.Workspaces = map[string]string{"workspace/default": root, "workspace/project": root}

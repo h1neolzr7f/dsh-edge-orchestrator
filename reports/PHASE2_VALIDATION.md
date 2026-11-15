@@ -63,8 +63,8 @@ B1、B3、B4、B5 的原代码都已运行出对应行为失败；B2 的新游�
 | 检查 | 结果 |
 |---|---|
 | go run ./packages/protocol/cmd/schema > schemas/protocol.schema.json | 生成成功；Draft 2020-12 Schema、协议文档 10 个 JSON 示例与 UTF-8/base64 日志 payload 校验通过 |
-| bash scripts/check.sh | 44 项顶层测试及其子测试通过；全部模块 go vet 通过；根集成测试包约 8.93 秒 |
-| go test -race ./tests ./apps/coordinator ./apps/edge-agent ./packages/edge-link | 全部通过；根集成测试包约 42.71 秒；无竞态报告 |
+| bash scripts/check.sh | 45 项顶层测试及其子测试通过；全部模块 go vet 通过；根集成测试包约 9.05 秒 |
+| go test -race ./tests ./apps/coordinator ./apps/edge-agent ./packages/edge-link | 全部通过；根集成测试包通过；无竞态报告 |
 | bash scripts/build.sh | CGO_ENABLED=0，coordinator / edge-agent / edge-cli × linux/amd64、linux/arm64、windows/amd64，全 9 个构建通过 |
 
 8 MiB 取消日志压力回归单独在 -race 下通过约 27.81 秒，stdout_offset=磁盘完整长度；独立的进程树取消案例继续要求从 Control(cancel) 到 cancelled 不超过 2 秒，并检查派生进程不存活。压力测试时限不是进程停止时限。
@@ -72,3 +72,11 @@ B1、B3、B4、B5 的原代码都已运行出对应行为失败；B2 的新游�
 一键演示从干净数据目录实际启动 1 Coordinator + 2 Worker 进程：Python unittest 退出码 0、stderr 包含 OK、Git HEAD 与基准一致、汇总 count=2，最终 Plan succeeded。演示和产品构建均显式使用 CGO_ENABLED=0。
 
 验收材料包含源码、回归测试、运行指南、示例及演示脚本；不把这份本机报告解释为 GitHub Actions 或 Windows 原生运行结果。
+
+## Windows 原生 CI 追加修复
+
+PR #3 的首次 Windows 原生运行暴露了交叉编译无法发现的问题：8.3 临时路径与长路径比较使任务独立 worktree 被误判为越界；8 MiB 日志逐块提交产生较高落盘开销；Job 已无子进程时 runner 尚未退出，任务提前终态可能留下临时文件占用。
+
+修复将 Agent 数据目录与授权目录统一为 EvalSymlinks 的规范路径，新增 TestDataDirectoryUsesCanonicalPath（先失败再通过）；日志每批最多 16 块在同一事务内原子保存事件和偏移；终态要求 runner 身份已不存活，握手恢复测试额外断言 runner 已退出。保留 4 KiB 日志粒度、60 秒完整性压力预算和独立的 2 秒进程树取消要求。
+
+本地重新执行全模块检查、竞态检测和九目标构建。最终 Windows/Linux 原生 CI 状态可从 [PR #3 检查页](https://github.com/h1neolzr7f/dsh-edge-orchestrator/pull/3/checks) 核对；本机报告仍仅代表 Linux 运行结果。
