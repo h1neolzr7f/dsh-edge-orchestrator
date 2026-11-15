@@ -2,11 +2,13 @@
 
 按交付闭环组织，不以代码文件数量代替功能。优先做真实可用的跨设备执行链路。
 
+2026-11-15：Phase 0/1 核心 Go 运行闭环已实现，见 PHASE1_QUICKSTART.md 与 ../reports/PHASE0_PHASE1_VALIDATION.md。未勾选项可能包含已实现的子集；复合条目只有全部完成才勾选，手机、外网弱网与原生平台验收仍未完成。
+
 ## EPIC 0 — Edge Link Vertical Slice
 
-- [ ] E0-1 Go Coordinator 提供 HTTPS/WSS 服务。
-- [ ] E0-2 Go Agent 主动连接并完成 hello/welcome。
-- [ ] E0-3 Device register + heartbeat。
+- [x] E0-1 Go Coordinator 提供 HTTPS/WSS 服务。
+- [x] E0-2 Go Agent 主动连接并完成 hello/welcome。
+- [x] E0-3 Device register + heartbeat。
 - [ ] E0-4 Dart 最小客户端查看两个 Worker。
 - [ ] E0-5 同 LAN 和公网 Coordinator 各验证一次。
 - [ ] E0-6 断网 30 秒后自动恢复。
@@ -20,8 +22,8 @@
 - [ ] E1-3 Coordinator SQLite schema：task_events.coord_seq 自增主键、UNIQUE(device_id, worker_seq)、worker_event_inbox 乱序缓冲、Plan/Task 幂等唯一约束和依赖解锁事务。
 - [ ] E1-4 Worker 本地 local_task_ledger 与 event_outbox；进程身份三元组、磁盘日志及事务化 tail 偏移。
 - [ ] E1-5 协议版本协商和兼容测试。
-- [ ] E1-6 Go 1.22+ go.work、纯 Go SQLite、CGO_ENABLED=0 三平台交叉编译。
-- [ ] E1-7 tests/e2e_phase0_phase1_test.go：两 Worker、两前置一汇总、Controller 离线自动解锁、幂等一次执行、单 last_coord_seq 无重复漏事件。
+- [x] E1-6 Go 1.22+ go.work、纯 Go SQLite、CGO_ENABLED=0 三平台交叉编译。
+- [x] E1-7 tests/e2e_phase0_phase1_test.go：两 Worker、两前置一汇总、Controller 离线自动解锁、幂等一次执行、单 last_coord_seq 无重复漏事件。
 
 ## EPIC 2 — Edge Agent MVP
 

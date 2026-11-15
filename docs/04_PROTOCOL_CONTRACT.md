@@ -1,6 +1,6 @@
 # 04. 设备、任务与通信协议
 
-V1 使用 TLS/WSS 控制通道及独立 HTTPS Artifact 通道。本文是字段、状态与恢复语义的规范来源；当前为待实现契约，不代表已有运行代码。
+V1 使用 TLS/WSS 控制通道及独立 HTTPS Artifact 通道。本文是字段、状态与恢复语义的规范来源；本契约覆盖完整 V1。Phase 0/1 已实现的子集与暂不支持字段见 [运行指南](PHASE1_QUICKSTART.md)，不能把全文视为已全部实现。
 
 ## 4.1 统一消息 Envelope
 
@@ -92,7 +92,8 @@ link.resume 使用相同 role、device_id 和对应业务游标字段，在已�
   "permission_scope": "process.exec",
   "resource_class": "cpu",
   "max_concurrency": 2,
-  "discovery": "static"
+  "discovery": "static",
+  "authorized": true
 }
 ~~~
 

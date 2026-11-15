@@ -6,7 +6,7 @@ DSH Edge Orchestrator 是围绕 DSH Go 建设的跨设备 Agent 编排系统。�
 
 它不是远程桌面，也不是 SSH 管理面板。核心抽象是：**设备是执行节点，能力是可组合工具，任务是持久化工作单元，编排器负责跨设备协作。**
 
-> 当前状态：Architecture / Planning。本文档定义产品和工程路线，不代表功能已经实现。
+> 当前状态：Phase 0/1 Runtime。Go Coordinator、Worker、CLI 与 TLS/SQLite 编排闭环已实现；DSH Go 手机集成及后续执行能力尚待开发。见 [运行指南](docs/PHASE1_QUICKSTART.md)。
 
 ## 重要架构决定：不把 DS Harness Remote 作为核心通信依赖
 
@@ -23,6 +23,14 @@ DSH Edge Orchestrator 是围绕 DSH Go 建设的跨设备 Agent 编排系统。�
 ## 交互原则：像 Grok Bot 一样委派工作
 
 **聊天是默认入口，Fleet 在背后自主调度设备。** 用户只需自然语言/语音交代目标；聊天中出现跨设备任务卡、执行进度和结果。任务持续运行并支持网络恢复。能否看画面、能否人工接管取决于设备适配器，不以空白预览假冒已实现能力。详见 [交互体验规范](docs/10_CHAT_FIRST_UX.md)。
+
+## 现在可以运行
+
+```bash
+bash scripts/demo.sh
+```
+
+一个 Coordinator、两个真实 Worker 进程、两前置一汇总的任务 DAG；支持任务去重、断线补传、Coordinator 重启恢复、全局事件游标及暂停后续调度。当前能力为 device.inspect 与 report.aggregate；完整 V1 范围见下文。
 
 ## V1 要交付什么
 
@@ -80,6 +88,7 @@ flowchart TB
 - [Grok Bot 式交互体验规范](docs/10_CHAT_FIRST_UX.md)
 - [实施 Backlog](docs/IMPLEMENTATION_BACKLOG.md)
 - [第一阶段变更核对清单](docs/CHANGELOG_PHASE1_CONTRACTS.md)
+- [Phase 0/1 运行指南](docs/PHASE1_QUICKSTART.md)
 - [架构决策记录](docs/decisions/)
 
 ## 第一版演示
