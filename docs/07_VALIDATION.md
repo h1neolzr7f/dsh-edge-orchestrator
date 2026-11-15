@@ -16,8 +16,8 @@
 1. 两台 Worker 均返回 accepted。
 2. 两个任务执行时间窗口重叠。
 3. 各自生成结果与 Artifact。
-4. Coordinator 汇总结果。
-5. 手机断网再恢复，仍显示同一 plan_id/task_id 和最终状态。
+4. Coordinator 自动派发显式下游汇总任务，生成带上游 Artifact 引用的报告。
+5. 手机在前置执行期间断网，下游仍被解锁；恢复后按 last_coord_seq 显示同一 plan_id/task_id 和最终状态。
 
 ## 7.3 连接与弱网验收
 
@@ -25,7 +25,7 @@
 
 检查：
 - 连接状态正确区分 online/degraded/offline；
-- 未确认消息按游标续传；
+- 连接帧重置 sequence/ack；Worker 按 last_worker_seq、Controller 按 last_coord_seq 恢复；
 - 同一任务不会因重复消息启动两次；
 - 一个 Worker 慢连接不阻塞其他节点；
 - Worker 断线时已接受任务继续执行。
@@ -52,7 +52,7 @@
 - Controller 将任务视为 unknown。
 - 恢复后使用原 task_id 查询。
 - Worker 返回原任务状态，不创建第二个执行实例。
-- Worker 重启后读取本地 ledger，恢复或明确标记无法确认的任务。
+- Worker 重启后核对进程身份三元组、磁盘日志和退出状态；无法确认则 failed / interrupted_by_restart。
 
 ## 7.7 初始性能目标
 
@@ -73,3 +73,42 @@
 - Artifact SHA-256；
 - 断网与恢复日志或录像；
 - 弱网测试结果和已知限制。
+
+## 7.9 本轮协议修订的验收矩阵（待代码阶段执行）
+
+下表是必须实现的测试，不代表已测试通过。当前仓库仅有架构文档；文档检查不能替代运行验收。
+
+| 项目 | 注入条件 | 通过条件 |
+|---|---|---|
+| 双层集成 | 分别加载 Node.js Cordis 插件和 Flutter UI | 引擎恰有 8 个 fleet 工具；Dart 通过 edge-link-dart 订阅卡片；不在 Flutter 执行依赖解锁 |
+| 手机离线 DAG | 两前置运行时断开 Controller，保持 Coordinator/Worker 在线 | 两任务实际并行，前置成功及产物 ready 后第 3 个汇总任务自动启动；plan_id 不变 |
+| 无效 DAG | 环、缺失依赖、重复 task_id、无效并发数 | plan.rejected，Plan/Task/事件均不部分创建 |
+| 暂停调度 | plan.pause 时已有任务运行，再 plan.resume | 当前任务继续，暂停期间不派发后继；恢复仍用原 Plan，状态事件可重放 |
+| 步骤取消收敛 | 单独 task.cancel 最后一个未完成步骤 | 所有任务终态后 Plan 按规则进入 cancelled 或 failed，plan.completed 仅一次 |
+| Plan 幂等 | 相同 idempotency_key 重复提交，再更改内容 | 相同内容返回原 Plan；不同内容 IDEMPOTENCY_CONFLICT；plan.created 仅一次 |
+| 三层序号 | 两 Worker 交错产事件、断线换物理连接 | sequence/ack 重置；worker_seq 跨任务不重置；单 last_coord_seq 补齐两设备及 Plan 变化 |
+| 事件确认 | 接收后落库前崩溃、ACK 丢失、先到 90 后到 89 | 未提交不发 event.ack；重复不增 coord_seq、不二次解锁；乱序 90 缓冲到 inbox，补齐 89 后才依次发布与解锁；last_worker_seq 只推进连续值 |
+| 快照屏障 | 读取快照与建立订阅之间写入事件 | snapshot_coord_seq 后的事件全部到达，无重复应用；过期明确 CURSOR_EXPIRED |
+| 工作区基准 | A/B HEAD 不同、同 HEAD 但脏文件或未跟踪文件 | 无自动同步时 WORKSPACE_MISMATCH；预检失败未启动程序；两节点原工作区不被覆盖 |
+| 补丁一致 | 同 HEAD + 同 patch_artifact_id，再改补丁哈希或使其不可应用 | 相同补丁隔离执行；校验/应用失败明确报错，原工作区不变 |
+| DAG 产物传递 | A 上传 JUnit、B 上传审查结果，后继用 input_artifact_bindings | 解析为相同 Artifact ID/哈希，HTTPS 下载到 mount_path；两文件验证后才 running |
+| 输入损坏 | 截断文件、错误 SHA-256、下载中断、路径逃逸 | 损坏为 ARTIFACT_HASH_MISMATCH，路径拒绝；断网续传保持 accepted，截止后失败；不启动程序 |
+| PID 复用 | ledger PID 存在但 start time 或 boot ID 不同 | 不恢复 tail 到错误进程，不对无关进程发信号；failed / interrupted_by_restart |
+| Agent 崩溃 | 用户任务运行中强杀 Agent，runner 存活并继续写日志 | 任务不随 Agent 退出；重启验证三元组并从持久偏移补日志，不丢字节、不再执行 |
+| 启动窗口崩溃 | launching 后、进程创建后、身份落盘前分别强杀 Agent | 与独立 runner 对账；无法确认则 interrupted_by_restart，不盲目启动第二实例 |
+| Linux 取消/超时 | 父子进程均写文件、子进程忽略 SIGTERM | -pgid 收 SIGTERM，5 秒宽限后 SIGKILL；整组退出、文件释放；核对身份防复用 |
+| Windows 取消/超时 | Job 内多级子进程持有文件，Agent 重启后取消 | TerminateJobObject 清整树并释放锁；Job 可重开；不因 Agent 句柄关闭误杀运行任务 |
+| OS 重启 | 开始任务后系统重启 | os_boot_id 变化，不附着新 PID；可信退出状态或 interrupted_by_restart 明确收敛 |
+
+## 7.10 Phase 0/1 最小代码闭环门槛
+
+用户确认文档后开始代码实现。Go 1.22+ Workspace 管理 apps/coordinator、apps/edge-agent、apps/edge-cli、packages/protocol、packages/edge-link；Coordinator 内嵌 packages/orchestrator（建模块时加入 go.work）。SQLite 使用纯 Go 驱动，不依赖 CGO。
+
+`tests/e2e_phase0_phase1_test.go` 必须在临时目录真实启动 Coordinator、SQLite 及两个 Agent（worker-win-sim / worker-linux-sim），验证：
+
+1. 两 Worker 完成握手、注册及 device.inspect 上报。
+2. 提交含两个并行前置与一个依赖汇总的 PlanEnvelope；汇总使用确定性测试能力，不依赖手机 LLM。
+3. Controller 在前置运行时断线，Coordinator 自主解锁并完成下游。
+4. 重复投递相同 idempotency_key，Worker 返回原 Receipt，执行计数严格为 1。
+5. Controller 携带 last_coord_seq 恢复，收到全部缺失事件（含 Plan 事件），按 coord_seq 升序且去重后集合与数据库一致；不要求主键数值无空洞。
+6. 三平台 CGO_ENABLED=0 交叉编译通过。sim 名称只证明协议流程，Windows Job Object 和 Linux 进程组必须在原生平台单独跑 7.9 对应验收，不能把模拟节点算作 Windows 原生验收。

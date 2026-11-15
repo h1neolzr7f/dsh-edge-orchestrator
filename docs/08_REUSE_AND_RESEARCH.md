@@ -11,7 +11,13 @@
 - Phone Control、Accessibility、Shizuku/ADB 等原生能力；
 - 模型适配、会话、语音、审批和原有插件生态。
 
-新项目通过 Cordis Fleet 插件和 Dart client 接入，不复制第二套 Agent Loop，不重写 DSH Go 的已有手机控制能力。
+上游真实分层为 Flutter/Dart 界面 + Kotlin 系统桥接，以及 PRoot Ubuntu 内的 Node.js DSH 引擎与 Cordis 插件。`integrations/dsh-cordis-plugin/` 使用 TypeScript/Node.js 注册 8 个 Fleet 工具；`integrations/dsh-flutter-ui/` 使用 Flutter/Dart 任务卡与配对页，经 `packages/edge-link-dart/` 订阅 Coordinator。两层不混编，不复制第二套 Agent Loop。
+
+### 开源许可证与品牌合规边界
+
+2026-11-15 核对上游 [README](https://github.com/ccch1mneyyy/dsh-go/blob/main/README.md)、[LICENSE](https://github.com/ccch1mneyyy/dsh-go/blob/main/LICENSE) 与 [ASSETS.md](https://github.com/ccch1mneyyy/dsh-go/blob/main/ASSETS.md)：主体代码为 AGPL-3.0，sdk/ 与 examples/ 另有 MIT 授权；DSH Go 名称/标识、Deepy、鲸娘及指定素材不随源码开放授权。
+
+本仓库 Go Coordinator、Edge Agent 与协议保持独立源码及开源分发，通过标准插件接口与上游集成；不直接闭源分发修改版 DSH Go APK，不在衍生分发包中挪用 DSH Go 标识、Deepy 或鲸娘。源码引用须保留许可证与署名；修改并分发上游覆盖作品时履行 AGPL 对应源码等义务，独立进程边界不豁免实际复制或组合产生的义务。上游允许为构建、测试、运行其仓库使用素材，衍生再发布必须替换为自己的名称与素材。
 
 ## 8.2 DS Harness Remote：可选适配器，不是 V1 核心底座
 
@@ -47,7 +53,9 @@
 
 | 能力 | 决策 |
 |---|---|
-| DSH Agent / Cordis / Android UI | 复用 DSH Go |
+| DSH Agent Loop | 使用上游 Node.js 引擎，不重写 |
+| Cordis Fleet 工具 | 独立 TypeScript/Node.js 插件 |
+| Flutter UI / Kotlin 桥接 | 原聊天内集成；Dart client 独立 |
 | 设备任务模型与 DAG | 自研 |
 | Edge Coordinator | 自研 Go 服务 |
 | Edge Agent | 自研 Go 常驻进程 |
@@ -56,6 +64,10 @@
 | 断线恢复 / ACK / outbox | 自研，属于核心能力 |
 | Artifact 分块续传 | 自研薄层 |
 | DS Harness Remote | 可选 adapter / 参考实现 |
+
+### 开源许可证与品牌合规边界：交付检查
+
+Go 服务和协议不打包上游 APK 或受限素材；Flutter 修改如进入上游覆盖代码，按其许可证提供对应源码。发行清单记录来源、版本、LICENSE/NOTICE 与素材替换情况。本轮只修订文档，不替本仓库擅自选择源码许可证；可分发代码首次交付前须在仓库落定 LICENSE，未落定前不能把公开可见等同于已获开源许可。
 
 ## 8.4 为什么 V1 选择 WebSocket/TLS
 
