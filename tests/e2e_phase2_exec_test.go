@@ -471,6 +471,19 @@ func TestPhase2CancellationPersistsAcrossAgentRestart(t *testing.T) {
 	check, cancel := context.WithTimeout(e.ctx, 2*time.Second)
 	defer cancel()
 	await(t, check, func() bool { s, err := e.c.Plan(check, p.PlanID); return err == nil && s.Status == "cancelled" })
+	db, err = sql.Open("sqlite", e.cfgA.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pid int
+	err = db.QueryRow(`SELECT pid FROM local_task_ledger WHERE id=?`, job.TaskID).Scan(&pid)
+	db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if childAlive(pid) {
+		t.Fatalf("cancelled recovered task left runner %d alive", pid)
+	}
 }
 func TestPhase2ProcessCancelCapability(t *testing.T) {
 	e := newPhase2(t)

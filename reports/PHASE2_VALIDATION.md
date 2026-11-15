@@ -75,8 +75,8 @@ B1、B3、B4、B5 的原代码都已运行出对应行为失败；B2 的新游�
 
 ## Windows 原生 CI 追加修复
 
-PR #3 的首次 Windows 原生运行暴露了交叉编译无法发现的问题：8.3 临时路径与长路径比较使任务独立 worktree 被误判为越界；8 MiB 日志逐块提交产生较高落盘开销；Job 已无子进程时 runner 尚未退出，任务提前终态可能留下临时文件占用。
+PR #3 的首次 Windows 原生运行暴露了交叉编译无法发现的问题：8.3 临时路径与长路径比较使任务独立 worktree 被误判为越界；8 MiB 日志逐块提交产生较高落盘开销；Job 已无子进程时 runner 尚未退出，任务提前终态可能留下临时文件占用。复验还发现通用 execute 的取消检查会在恢复监控前直接返回；Linux 虽能删除被占用目录，也存在相同的残留 runner 问题。
 
-修复将 Agent 数据目录与授权目录统一为 EvalSymlinks 的规范路径，新增 TestDataDirectoryUsesCanonicalPath（先失败再通过）；日志每批最多 16 块在同一事务内原子保存事件和偏移；终态要求 runner 身份已不存活，握手恢复测试额外断言 runner 已退出。保留 4 KiB 日志粒度、60 秒完整性压力预算和独立的 2 秒进程树取消要求。
+修复将 Agent 数据目录与授权目录统一为 EvalSymlinks 的规范路径，新增 TestDataDirectoryUsesCanonicalPath（先失败再通过）；日志每批最多 16 块在同一事务内原子保存事件和偏移；终态要求 runner 身份已不存活，握手恢复测试额外断言 runner 已退出；已取消的恢复 process.exec 允许进入清理监控，持久取消 E2E 在终态后查询 runner PID 并确认不再存活，该断言在修复前于 Linux 同样失败。保留 4 KiB 日志粒度、60 秒完整性压力预算和独立的 2 秒进程树取消要求。
 
 本地重新执行全模块检查、竞态检测和九目标构建。最终 Windows/Linux 原生 CI 状态可从 [PR #3 检查页](https://github.com/h1neolzr7f/dsh-edge-orchestrator/pull/3/checks) 核对；本机报告仍仅代表 Linux 运行结果。

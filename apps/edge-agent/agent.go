@@ -464,7 +464,14 @@ func supports(t protocol.TaskEnvelope) bool {
 }
 func (a *Agent) execute(ctx context.Context, t protocol.TaskEnvelope) (json.RawMessage, error) {
 	if e := ctx.Err(); e != nil {
-		return nil, e
+		a.mu.Lock()
+		resuming := a.resuming[t.TaskID]
+		a.mu.Unlock()
+		// A recovered process still needs its monitor to stop the owned tree
+		// and drain logs even when cancellation was persisted before restart.
+		if t.Capability.ID != "process.exec" || !resuming {
+			return nil, e
+		}
 	}
 	switch t.Capability.ID {
 	case "device.inspect":
