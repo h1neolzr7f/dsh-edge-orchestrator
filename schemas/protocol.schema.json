@@ -376,12 +376,37 @@
     "EventPayload": {
       "additionalProperties": false,
       "properties": {
+        "completed": {
+          "type": "integer"
+        },
+        "data": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
         "error": {
           "$ref": "#/$defs/Error"
+        },
+        "length": {
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer"
         },
         "result": {},
         "status": {
           "type": "string"
+        },
+        "stream": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "total": {
+          "type": "integer"
         }
       },
       "required": [],

@@ -16,6 +16,9 @@ func schema(t reflect.Type) map[string]any {
 	if t == reflect.TypeOf(time.Time{}) {
 		return map[string]any{"type": "string", "format": "date-time"}
 	}
+	if t == reflect.TypeOf([]byte{}) {
+		return map[string]any{"type": "string", "contentEncoding": "base64"}
+	}
 	if t == reflect.TypeOf(json.RawMessage{}) {
 		return map[string]any{}
 	}

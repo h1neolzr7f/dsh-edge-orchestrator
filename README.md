@@ -6,7 +6,7 @@ DSH Edge Orchestrator 是围绕 DSH Go 建设的跨设备 Agent 编排系统。�
 
 它不是远程桌面，也不是 SSH 管理面板。核心抽象是：**设备是执行节点，能力是可组合工具，任务是持久化工作单元，编排器负责跨设备协作。**
 
-> 当前状态：Phase 0/1 Runtime。Go Coordinator、Worker、CLI 与 TLS/SQLite 编排闭环已实现；DSH Go 手机集成及后续执行能力尚待开发。见 [运行指南](docs/PHASE1_QUICKSTART.md)。
+> 当前状态：Phase 2 真实执行闭环。已实现 Go Coordinator、Worker、CLI、授权工作区、真实进程/文件/Git 能力、磁盘日志及恢复。见 [Phase 2 运行指南](docs/PHASE2_QUICKSTART.md)。
 
 ## 重要架构决定：不把 DS Harness Remote 作为核心通信依赖
 
@@ -27,10 +27,10 @@ DSH Edge Orchestrator 是围绕 DSH Go 建设的跨设备 Agent 编排系统。�
 ## 现在可以运行
 
 ```bash
-bash scripts/demo.sh
+bash scripts/demo-phase2.sh
 ```
 
-一个 Coordinator、两个真实 Worker 进程、两前置一汇总的任务 DAG；支持任务去重、断线补传、Coordinator 重启恢复、全局事件游标及暂停后续调度。当前能力为 device.inspect 与 report.aggregate；完整 V1 范围见下文。
+一个 Coordinator、两个真实 Worker 进程、两前置一汇总的任务 DAG；支持任务去重、断线补传、Coordinator 重启恢复、全局事件游标及暂停后续调度。可运行 process.exec / cancel、filesystem.read / write、git.inspect，并由 report.aggregate 汇总；完整 V1 范围见下文。
 
 ## V1 要交付什么
 
@@ -89,6 +89,8 @@ flowchart TB
 - [实施 Backlog](docs/IMPLEMENTATION_BACKLOG.md)
 - [第一阶段变更核对清单](docs/CHANGELOG_PHASE1_CONTRACTS.md)
 - [Phase 0/1 运行指南](docs/PHASE1_QUICKSTART.md)
+- [Phase 2 运行指南](docs/PHASE2_QUICKSTART.md)
+- [第二轮变更与验收报告](reports/PHASE2_VALIDATION.md)
 - [架构决策记录](docs/decisions/)
 
 ## 第一版演示

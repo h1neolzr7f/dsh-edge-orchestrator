@@ -126,11 +126,11 @@ func (s *Server) Submit(p protocol.PlanEnvelope) (protocol.PlanAccepted, error) 
 		return out, e
 	}
 	for _, t := range p.Tasks {
-		if t.Capability.ID != "device.inspect" && t.Capability.ID != "report.aggregate" {
+		if !supportedCapability(t.Capability.ID) {
 			return out, protocol.Err("UNSUPPORTED_CAPABILITY", t.Capability.ID)
 		}
-		if t.WorkspaceContext != nil || len(t.InputArtifacts) > 0 || len(t.InputArtifactBindings) > 0 {
-			return out, protocol.Err("UNSUPPORTED_PRECONDITION", "workspace and artifact execution arrive after Phase 1")
+		if (t.WorkspaceContext != nil && t.WorkspaceContext.PatchArtifactID != "") || len(t.InputArtifacts) > 0 || len(t.InputArtifactBindings) > 0 {
+			return out, protocol.Err("UNSUPPORTED_PRECONDITION", "artifact and patch transfer is not installed")
 		}
 	}
 	tx, e := s.db.Begin()
@@ -597,4 +597,12 @@ func (s *Server) resolveAbsentCancellation(device, id string) error {
 		return e
 	}
 	return tx.Commit()
+}
+
+func supportedCapability(id string) bool {
+	switch id {
+	case "device.inspect", "report.aggregate", "process.exec", "process.cancel", "filesystem.read", "filesystem.write", "git.inspect":
+		return true
+	}
+	return false
 }

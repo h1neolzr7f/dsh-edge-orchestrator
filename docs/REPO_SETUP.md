@@ -41,6 +41,6 @@ tests
 
 先按 docs/03_EXECUTION_PLAN.md 的 Phase 0 开发，不接入 DS Harness Remote。根 go.work 管理 apps/coordinator、apps/edge-agent、apps/edge-cli、packages/protocol、packages/edge-link，其他 Go package 建模块时加入。Coordinator 内嵌 packages/orchestrator 驱动 DAG；Dart package 不加入 Go Workspace。
 
-SQLite 必须使用 modernc.org/sqlite 等纯 Go 驱动，不依赖 CGO；代码阶段验证 CGO_ENABLED=0 下 Windows amd64、Linux amd64、Linux arm64 交叉编译。本轮已初始化 Go Workspace、命令行程序与自动化构建；实测命令和支持范围见 PHASE1_QUICKSTART.md。
+SQLite 必须使用 modernc.org/sqlite 等纯 Go 驱动，不依赖 CGO；代码阶段验证 CGO_ENABLED=0 下 Windows amd64、Linux amd64、Linux arm64 交叉编译。本轮已初始化 Go Workspace、命令行程序与自动化构建；实测命令和支持范围见 PHASE2_QUICKSTART.md。
 
 集成前按 08_REUSE_AND_RESEARCH.md 核对 AGPL-3.0、SDK MIT 与品牌/素材边界，衍生发行使用自己的名称和素材；本仓库代码分发前落定 LICENSE。

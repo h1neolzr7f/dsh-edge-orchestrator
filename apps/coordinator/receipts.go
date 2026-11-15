@@ -63,7 +63,11 @@ func (s *Server) RecordTaskAccepted(device string, rec protocol.TaskReceipt) err
 	if _, e = tx.Exec(`UPDATE tasks SET status='accepted',pending_reason='' WHERE id=?`, task.TaskID); e != nil {
 		return e
 	}
-	if _, e = planEvent(tx, task.PlanID, "plan.updated", "queued"); e != nil {
+	var planStatus string
+	if e = tx.QueryRow(`SELECT status FROM plans WHERE id=?`, task.PlanID).Scan(&planStatus); e != nil {
+		return e
+	}
+	if _, e = planEvent(tx, task.PlanID, "plan.updated", planStatus); e != nil {
 		return e
 	}
 	return tx.Commit()

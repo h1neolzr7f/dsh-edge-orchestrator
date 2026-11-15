@@ -1,6 +1,6 @@
 # 04. 设备、任务与通信协议
 
-V1 使用 TLS/WSS 控制通道及独立 HTTPS Artifact 通道。本文是字段、状态与恢复语义的规范来源；本契约覆盖完整 V1。Phase 0/1 已实现的子集与暂不支持字段见 [运行指南](PHASE1_QUICKSTART.md)，不能把全文视为已全部实现。
+V1 使用 TLS/WSS 控制通道及独立 HTTPS Artifact 通道。本文是字段、状态与恢复语义的规范来源；本契约覆盖完整 V1。Phase 2 已实现的子集与暂不支持字段见 [运行指南](PHASE2_QUICKSTART.md)，不能把全文视为已全部实现。
 
 ## 4.1 统一消息 Envelope
 
@@ -211,6 +211,8 @@ task.reconcile 的 payload 为 `{task_id}`，返回 task.snapshot（task_id、st
 
 task.cancel 的 payload 为 `{task_id}`，请求幂等；未派发直接 cancelled，已接受任务先清理受管进程树再产生终态。deadline 由 Worker 本地执行，超时清理后 failed / DEADLINE_EXCEEDED。错误对象统一 `{code, message}`；恢复后无可信退出状态为 failed / interrupted_by_restart，详见 05 与 ADR-004。
 
+TaskSnapshot 增加可选 pending_reason，queued 阻塞值固定为 waiting_dependencies、scheduling_paused、concurrency_limit、device_offline、capability_unavailable、device_busy；非 queued 清空，变化产生 plan.updated。
+
 ## 4.7 Event
 
 Coordinator 对 Controller 发布的事件：
@@ -234,7 +236,7 @@ Worker 在 event_outbox 事务中按 device_id 分配 worker_seq 并更新任务
 
 事务提交后才返回 `event.ack {"last_worker_seq": 88}`，只确认最高连续节点事件；收到 90 但缺 89 时仍确认 88。Worker 仅按此值清理 outbox。已分配序号的事件不能合并丢弃，限频合并必须发生在分配前。
 
-Coordinator 自身 Plan 状态事件也写 task_events 并分配 coord_seq，但不带 device_id、worker_seq、task_seq，可无 task_id，以 plan_id 关联。Controller 按 coord_seq 去重升序应用；task_seq 仅展示，不能恢复多设备事件。
+Coordinator 自身 Plan 状态事件也写 task_events 并分配 coord_seq，但不带 device_id、worker_seq、task_seq，可无 task_id，以 plan_id 关联。Controller 按 coord_seq 去重升序应用；task_seq 仅展示，不能恢复多设备事件。task.log payload 可带 stream、offset、length、text、data（原始字节的 base64）；有效 UTF-8 保持完整字符边界，offset 按原始字节计。
 
 ## 4.8 V1 消息类型与 UI 映射
 
