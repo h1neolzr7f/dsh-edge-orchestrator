@@ -67,6 +67,9 @@ func schema(t reflect.Type) map[string]any {
 				if key == "sequence" || key == "concurrency_limit" || key == "max_concurrency" {
 					s["minimum"] = 1
 				}
+				if key == "pending_reason" {
+					s["enum"] = []string{"", "waiting_dependencies", "scheduling_paused", "concurrency_limit", "device_offline", "capability_unavailable", "device_busy"}
+				}
 				props[key] = s
 				if !strings.Contains(tag, "omitempty") {
 					required = append(required, key)

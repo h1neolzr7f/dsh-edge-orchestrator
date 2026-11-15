@@ -14,7 +14,7 @@ import (
 const schema = `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY,registration TEXT NOT NULL,last_worker_seq INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY,ikey TEXT UNIQUE NOT NULL,hash TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,paused INTEGER NOT NULL DEFAULT 0,cancelled INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,plan_id TEXT NOT NULL REFERENCES plans(id),ikey TEXT UNIQUE NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,task_seq INTEGER NOT NULL DEFAULT 0,result TEXT,error TEXT,last_dispatch INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,plan_id TEXT NOT NULL REFERENCES plans(id),ikey TEXT UNIQUE NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,task_seq INTEGER NOT NULL DEFAULT 0,result TEXT,error TEXT,last_dispatch INTEGER NOT NULL DEFAULT 0,pending_reason TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS worker_event_inbox(device_id TEXT NOT NULL,worker_seq INTEGER NOT NULL,payload TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(device_id,worker_seq));
 CREATE TABLE IF NOT EXISTS task_events(coord_seq INTEGER PRIMARY KEY AUTOINCREMENT,device_id TEXT,worker_seq INTEGER,payload TEXT NOT NULL,UNIQUE(device_id,worker_seq));
 CREATE INDEX IF NOT EXISTS tasks_by_plan ON tasks(plan_id);`
@@ -54,7 +54,13 @@ func nullableSeq(n int64) any {
 func planEvent(tx *sql.Tx, id, kind, status string) (int64, error) {
 	return emit(tx, protocol.TaskEvent{EventID: protocol.NewID("evt"), PlanID: id, Type: kind, Timestamp: time.Now().UTC(), Payload: json.RawMessage(encode(protocol.EventPayload{Status: status}))})
 }
-func highWater(q interface{ QueryRow(string, ...any) *sql.Row }) (int64, error) {
+
+type dbQueryer interface {
+	Query(string, ...any) (*sql.Rows, error)
+	QueryRow(string, ...any) *sql.Row
+}
+
+func highWater(q dbQueryer) (int64, error) {
 	var n int64
 	e := q.QueryRow(`SELECT COALESCE(MAX(coord_seq),0) FROM task_events`).Scan(&n)
 	return n, e
@@ -73,7 +79,7 @@ func loadPlan(tx *sql.Tx, id string) (protocol.PlanSnapshot, error) {
 		return p, e
 	}
 	p.Tasks = []protocol.TaskSnapshot{}
-	rows, e := tx.Query(`SELECT payload,status,task_seq,result,error FROM tasks WHERE plan_id=? ORDER BY id`, id)
+	rows, e := tx.Query(`SELECT payload,status,task_seq,result,error,pending_reason FROM tasks WHERE plan_id=? ORDER BY id`, id)
 	if e != nil {
 		return p, e
 	}
@@ -81,13 +87,16 @@ func loadPlan(tx *sql.Tx, id string) (protocol.PlanSnapshot, error) {
 		var v protocol.TaskSnapshot
 		var raw string
 		var result, er sql.NullString
-		if e = rows.Scan(&raw, &v.Status, &v.TaskSeq, &result, &er); e != nil {
+		if e = rows.Scan(&raw, &v.Status, &v.TaskSeq, &result, &er, &v.PendingReason); e != nil {
 			rows.Close()
 			return p, e
 		}
 		if e = json.Unmarshal([]byte(raw), &v.Task); e != nil {
 			rows.Close()
 			return p, e
+		}
+		if v.Status != "queued" {
+			v.PendingReason = ""
 		}
 		v.Artifacts = []protocol.ArtifactRef{}
 		if result.Valid {
@@ -201,9 +210,9 @@ func (s *Server) Plan(id string) (protocol.PlanSnapshot, error) {
 	defer tx.Rollback()
 	return loadPlan(tx, id)
 }
-func (s *Server) devicesLocked() ([]protocol.DeviceSnapshot, error) {
+func (s *Server) devicesLocked(q dbQueryer) ([]protocol.DeviceSnapshot, error) {
 	out := []protocol.DeviceSnapshot{}
-	rows, e := s.db.Query(`SELECT registration FROM devices ORDER BY id`)
+	rows, e := q.Query(`SELECT registration FROM devices ORDER BY id`)
 	if e != nil {
 		return nil, e
 	}
@@ -224,22 +233,22 @@ func (s *Server) devicesLocked() ([]protocol.DeviceSnapshot, error) {
 func (s *Server) Devices() ([]protocol.DeviceSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.devicesLocked()
+	return s.devicesLocked(s.db)
 }
 func (s *Server) Snapshot() (protocol.FleetSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out protocol.FleetSnapshot
 	var e error
-	out.Devices, e = s.devicesLocked()
-	if e != nil {
-		return out, e
-	}
 	tx, e := s.db.Begin()
 	if e != nil {
 		return out, e
 	}
 	defer tx.Rollback()
+	out.Devices, e = s.devicesLocked(tx)
+	if e != nil {
+		return out, e
+	}
 	rows, e := tx.Query(`SELECT id FROM plans ORDER BY id`)
 	if e != nil {
 		return out, e
@@ -330,7 +339,7 @@ func refreshPlan(tx *sql.Tx, id string) error {
 			if t.Status == "queued" && orchestrator.DependencyFailed(t.Task, p.Tasks) {
 				t.Status = "rejected"
 				t.Error = &protocol.Error{Code: "DEPENDENCY_FAILED", Message: "prerequisite did not succeed"}
-				if _, e = tx.Exec(`UPDATE tasks SET status='rejected',error=? WHERE id=?`, encode(t.Error), t.Task.TaskID); e != nil {
+				if _, e = tx.Exec(`UPDATE tasks SET pending_reason='',status='rejected',error=? WHERE id=?`, encode(t.Error), t.Task.TaskID); e != nil {
 					return e
 				}
 				changed = true
@@ -397,6 +406,21 @@ func (s *Server) AppendEvent(device string, ev protocol.TaskEvent) (int64, error
 	if _, e = tx.Exec(`INSERT INTO worker_event_inbox(device_id,worker_seq,payload,hash) VALUES(?,?,?,?)`, device, ev.WorkerSeq, encode(ev), hash); e != nil {
 		return watermark, e
 	}
+	commitPrefix := func(cause error) (int64, error) {
+		if _, err := tx.Exec(`ROLLBACK TO advance_event`); err != nil {
+			return watermark, err
+		}
+		if _, err := tx.Exec(`RELEASE advance_event`); err != nil {
+			return watermark, err
+		}
+		if _, err := tx.Exec(`UPDATE devices SET last_worker_seq=? WHERE id=?`, watermark, device); err != nil {
+			return watermark, err
+		}
+		if err := tx.Commit(); err != nil {
+			return watermark, err
+		}
+		return watermark, cause
+	}
 	for {
 		var b string
 		e = tx.QueryRow(`SELECT payload FROM worker_event_inbox WHERE device_id=? AND worker_seq=?`, device, watermark+1).Scan(&b)
@@ -406,53 +430,56 @@ func (s *Server) AppendEvent(device string, ev protocol.TaskEvent) (int64, error
 		if e != nil {
 			return watermark, e
 		}
+		if _, e = tx.Exec(`SAVEPOINT advance_event`); e != nil {
+			return watermark, e
+		}
 		var next protocol.TaskEvent
 		if e = json.Unmarshal([]byte(b), &next); e != nil {
-			return watermark, e
+			return commitPrefix(e)
 		}
 		var status string
 		var seq int64
 		if e = tx.QueryRow(`SELECT status,task_seq FROM tasks WHERE id=?`, next.TaskID).Scan(&status, &seq); e != nil {
-			return watermark, e
+			return commitPrefix(e)
 		}
 		if next.TaskSeq != seq+1 {
-			return watermark, protocol.Err("INVALID_EVENT", "non-contiguous task_seq")
+			return commitPrefix(protocol.Err("INVALID_EVENT", "non-contiguous task_seq"))
 		}
 		var payload protocol.EventPayload
 		if e = protocol.Decode(next.Payload, &payload); e != nil {
-			return watermark, e
+			return commitPrefix(e)
 		}
 		target := status
 		switch next.Type {
 		case "task.started":
 			if status != "accepted" && status != "dispatched" {
-				return watermark, protocol.Err("INVALID_EVENT", "invalid start transition")
+				return commitPrefix(protocol.Err("INVALID_EVENT", "invalid start transition"))
 			}
 			target = "running"
 		case "task.succeeded":
 			if status != "running" {
-				return watermark, protocol.Err("INVALID_EVENT", "invalid success transition")
+				return commitPrefix(protocol.Err("INVALID_EVENT", "invalid success transition"))
 			}
 			target = "succeeded"
 		case "task.failed":
 			if status == "queued" || protocol.Terminal(status) {
-				return watermark, protocol.Err("INVALID_EVENT", "task already terminal")
+				return commitPrefix(protocol.Err("INVALID_EVENT", "task already terminal"))
 			}
 			target = "failed"
 		case "task.cancelled":
 			if status == "queued" || protocol.Terminal(status) {
-				return watermark, protocol.Err("INVALID_EVENT", "task already terminal")
+				return commitPrefix(protocol.Err("INVALID_EVENT", "task already terminal"))
 			}
 			target = "cancelled"
 		case "task.progress", "task.log":
 			if status != "running" {
-				return watermark, protocol.Err("INVALID_EVENT", "task not running")
+				return commitPrefix(protocol.Err("INVALID_EVENT", "task not running"))
 			}
 		default:
-			return watermark, protocol.Err("INVALID_EVENT", "unsupported event type")
+			return commitPrefix(protocol.Err("INVALID_EVENT", "unsupported event type"))
 		}
 		if _, e = emit(tx, next); e != nil {
-			return watermark, e
+			return commitPrefix(e)
 		}
 		var result, er any
 		if payload.Result != nil {
@@ -461,10 +488,16 @@ func (s *Server) AppendEvent(device string, ev protocol.TaskEvent) (int64, error
 		if payload.Error != nil {
 			er = encode(payload.Error)
 		}
-		if _, e = tx.Exec(`UPDATE tasks SET status=?,task_seq=?,result=COALESCE(?,result),error=COALESCE(?,error) WHERE id=?`, target, next.TaskSeq, result, er, next.TaskID); e != nil {
-			return watermark, e
+		if _, e = tx.Exec(`UPDATE tasks SET pending_reason='',status=?,task_seq=?,result=COALESCE(?,result),error=COALESCE(?,error) WHERE id=?`, target, next.TaskSeq, result, er, next.TaskID); e != nil {
+			return commitPrefix(e)
 		}
 		if e = refreshPlan(tx, next.PlanID); e != nil {
+			return commitPrefix(e)
+		}
+		if _, e = tx.Exec(`UPDATE worker_event_inbox SET payload='' WHERE device_id=? AND worker_seq=?`, device, next.WorkerSeq); e != nil {
+			return commitPrefix(e)
+		}
+		if _, e = tx.Exec(`RELEASE advance_event`); e != nil {
 			return watermark, e
 		}
 		watermark++
@@ -499,7 +532,7 @@ func (s *Server) Control(id, action string) (protocol.PlanSnapshot, error) {
 			if _, e = tx.Exec(`UPDATE plans SET cancelled=1 WHERE id=?`, id); e != nil {
 				return p, e
 			}
-			if _, e = tx.Exec(`UPDATE tasks SET status='cancelled' WHERE plan_id=? AND status='queued'`, id); e != nil {
+			if _, e = tx.Exec(`UPDATE tasks SET pending_reason='',status='cancelled' WHERE plan_id=? AND status='queued'`, id); e != nil {
 				return p, e
 			}
 			e = refreshPlan(tx, id)
@@ -557,7 +590,7 @@ func (s *Server) resolveAbsentCancellation(device, id string) error {
 	if !cancelled || protocol.Terminal(status) {
 		return nil
 	}
-	if _, e = tx.Exec(`UPDATE tasks SET status='cancelled' WHERE id=?`, id); e != nil {
+	if _, e = tx.Exec(`UPDATE tasks SET pending_reason='',status='cancelled' WHERE id=?`, id); e != nil {
 		return e
 	}
 	if e = refreshPlan(tx, planID); e != nil {

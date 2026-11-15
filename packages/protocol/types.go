@@ -182,12 +182,13 @@ type EventPayload struct {
 	Error  *Error          `json:"error,omitempty"`
 }
 type TaskSnapshot struct {
-	Task      TaskEnvelope    `json:"task"`
-	Status    string          `json:"status"`
-	TaskSeq   int64           `json:"task_seq"`
-	Result    json.RawMessage `json:"result,omitempty"`
-	Error     *Error          `json:"error,omitempty"`
-	Artifacts []ArtifactRef   `json:"artifacts"`
+	PendingReason string          `json:"pending_reason,omitempty"`
+	Task          TaskEnvelope    `json:"task"`
+	Status        string          `json:"status"`
+	TaskSeq       int64           `json:"task_seq"`
+	Result        json.RawMessage `json:"result,omitempty"`
+	Error         *Error          `json:"error,omitempty"`
+	Artifacts     []ArtifactRef   `json:"artifacts"`
 }
 type PlanSnapshot struct {
 	Plan             PlanEnvelope   `json:"plan"`

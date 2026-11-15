@@ -161,10 +161,10 @@ func (a *Agent) finish(t protocol.TaskEnvelope, result json.RawMessage, runErr e
 	}
 	return tx.Commit()
 }
-func (a *Agent) outbox() ([]protocol.TaskEvent, error) {
+func (a *Agent) outbox(afterSeq int64) ([]protocol.TaskEvent, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	rows, e := a.db.Query(`SELECT payload FROM event_outbox ORDER BY worker_seq LIMIT 100`)
+	rows, e := a.db.Query(`SELECT payload FROM event_outbox WHERE worker_seq > ? ORDER BY worker_seq LIMIT 100`, afterSeq)
 	if e != nil {
 		return nil, e
 	}

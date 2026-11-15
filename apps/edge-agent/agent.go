@@ -251,7 +251,7 @@ func (a *Agent) connect() error {
 					return
 				}
 			case <-ticker.C:
-				events, e := a.outbox()
+				events, e := a.outbox(sent)
 				if e != nil {
 					c.Close()
 					return

@@ -57,7 +57,7 @@ func TestCrashRecoveryNeverReexecutesClaimedTask(t *testing.T) {
 	if e != nil || len(pending) != 0 {
 		t.Fatal("claimed task rescheduled")
 	}
-	out, e := a.outbox()
+	out, e := a.outbox(0)
 	if e != nil || len(out) != 2 || out[1].Type != "task.failed" {
 		t.Fatalf("outbox=%+v %v", out, e)
 	}
@@ -94,8 +94,52 @@ func TestCancellationTombstoneSurvivesRestart(t *testing.T) {
 	if n, _ := a.ExecutionCount("late"); n != 0 {
 		t.Fatal("cancelled task executed")
 	}
-	events, e := a.outbox()
+	events, e := a.outbox(0)
 	if e != nil || len(events) != 1 || events[0].Type != "task.cancelled" {
 		t.Fatal("missing cancellation event")
+	}
+}
+func TestOutboxDrainsOver100UnackedEvents(t *testing.T) {
+	a, e := Open(Config{DBPath: filepath.Join(t.TempDir(), "a.db"), DeviceID: "w", Token: "s", CoordinatorURL: "https://localhost"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer a.Close()
+	task := protocol.TaskEnvelope{TaskID: "t", PlanID: "p", IdempotencyKey: "p:t", TargetDeviceID: "w", Capability: protocol.CapabilityRef{ID: "device.inspect", Version: "1.x"}, DependsOn: []string{}, Input: json.RawMessage(`{}`)}
+	a.Accept(task)
+	tx, e := a.db.Begin()
+	if e != nil {
+		t.Fatal(e)
+	}
+	for i := 0; i < 250; i++ {
+		if e = appendEvent(tx, "w", task, "task.progress", protocol.EventPayload{}, "running"); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e = tx.Commit(); e != nil {
+		t.Fatal(e)
+	}
+	sent := int64(0)
+	for sent < 250 {
+		batch, e := a.outbox(sent)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if len(batch) == 0 {
+			t.Fatalf("outbox stalled before ACK at %d", sent)
+		}
+		for _, ev := range batch {
+			if ev.WorkerSeq != sent+1 {
+				t.Fatal("lost ordering")
+			}
+			sent = ev.WorkerSeq
+		}
+	}
+	if e = a.ack(250); e != nil {
+		t.Fatal(e)
+	}
+	remaining, e := a.outbox(0)
+	if e != nil || len(remaining) != 0 {
+		t.Fatal("ACK did not clear outbox")
 	}
 }
