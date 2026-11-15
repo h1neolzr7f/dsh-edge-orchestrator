@@ -16,7 +16,7 @@ DSH Edge Orchestrator 是围绕 DSH Go 建设的跨设备 Agent 编排系统。�
 
 - DSH Go：保留原有 Agent、Cordis 插件、模型渠道、Android 本机操控和移动端交互。
 - DSH Edge Link：项目自有的轻量通信层，负责连接、心跳、重连、消息确认、状态恢复和文件传输。
-- Edge Coordinator：运行在常开 PC、服务器或 VPS 上，负责节点登记、任务路由和事件汇集。
+- Edge Coordinator：运行在常开 PC、服务器或 VPS 上，负责节点登记、Plan DAG 依赖解锁、任务路由和事件汇集。
 - Edge Agent：运行在 Windows/Linux/ARM 设备上的常驻执行节点；Android 使用原生适配器。
 - DS Harness Remote：仅作为可选兼容适配器和代码/协议参考，不在核心链路中。
 
@@ -59,12 +59,12 @@ flowchart TB
 
 ## 技术路线
 
-- Controller：继续使用 DSH Go Flutter/Dart；编排能力以 Cordis 插件和独立 Dart package 接入。
+- Controller：Node.js/TypeScript Cordis Fleet 插件负责工具调用；Flutter/Dart UI 通过独立 Edge Link client 接入快照和事件。
 - Coordinator / Edge Agent：优先采用 Go，构建单文件、低依赖的 Windows/Linux/ARM 部署包。
 - Android 原生能力：Kotlin Adapter，复用 DSH Go 已有手机操控能力。
 - 控制通道：TLS 之上的 WebSocket，采用单节点逻辑连接、消息 ID、ACK、心跳、恢复游标和任务幂等。
 - 文件通道：独立 HTTPS 分块上传/下载，支持断点续传和 SHA-256 校验。
-- 数据：Coordinator SQLite 起步；Worker 本地 SQLite/JSONL 任务日志。需要多人或多控制器时再迁移 PostgreSQL。
+- 数据：Coordinator SQLite 起步；Worker 本地 SQLite local_task_ledger、事件 outbox 与磁盘日志。需要多人或多控制器时再迁移 PostgreSQL。
 
 ## 文档
 
@@ -79,6 +79,7 @@ flowchart TB
 - [网络可靠性设计](docs/09_NETWORK_RELIABILITY.md)
 - [Grok Bot 式交互体验规范](docs/10_CHAT_FIRST_UX.md)
 - [实施 Backlog](docs/IMPLEMENTATION_BACKLOG.md)
+- [第一阶段变更核对清单](docs/CHANGELOG_PHASE1_CONTRACTS.md)
 - [架构决策记录](docs/decisions/)
 
 ## 第一版演示
@@ -89,6 +90,6 @@ flowchart TB
 - B：检查 diff、运行静态分析并上传 JSON 报告。
 - 两台 Worker 并行工作。
 - Coordinator 保存任务和事件；手机短暂断网后重新连接，继续看到原任务进度。
-- DSH Agent 汇总两个 Worker 的结果和证据。
+- Coordinator 自动派发显式下游汇总任务，即使手机离线也能生成报告；DSH Agent 恢复后将证据总结到聊天。
 
 验收标准是完整任务闭环、真实并行和网络恢复，不是设备列表能显示。

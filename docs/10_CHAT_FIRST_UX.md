@@ -7,7 +7,7 @@
 
 ## 1. 产品意图
 
-用户与主 DSH Agent 对话，像委派工作给同事一样表达目标。主 Agent 自主发现授权设备、理解各自能力、规划分工、委派执行、审核和总结。用户不需要亲自切换 Remote Host、复制提示词、创建多个会话或搬运文件。
+用户与主 DSH Agent 对话，像委派工作给同事一样表达目标。主 Agent 自主发现授权设备、理解各自能力、生成 Plan 并委派工作。plan.submit 后，Go Coordinator 内嵌 packages/orchestrator 独立执行拓扑校验、依赖解锁、能力匹配、并发门控和重试状态机，手机离线也能推进。用户不需要亲自切换 Remote Host、复制提示词、创建多个会话或搬运文件。
 
 与 Grok Bot 的区别：Grok Bot 的持续云电脑和 Bot 协作是现有产品形态；DSH Edge Orchestrator 允许 Android 手机、用户自己的 Windows/Linux/ARM、服务器和边缘硬件组成可调度网络。我们借鉴**交互语法与体验原则**，不模仿专有 UI 或声称已实现其全部特性。
 
@@ -18,10 +18,10 @@
 推荐主路径：
 1. 用户输入目标或语音委派：“把 A 机器的代码修复，B 机器运行测试，完成后告诉我。”
 2. DSH Agent 读取授权节点和能力，自动生成任务计划；必要时只确认关键权限或缺失信息。
-3. 聊天中插入一张**任务概览卡片**：任务名、状态、节点数、进度、暂停/取消、展开详情。
+3. 聊天中插入一张**任务概览卡片**：任务名、状态、节点数、进度、暂停后续步骤/继续、审批/取消、展开详情。
 4. 每个已派发节点呈现**执行卡片**：设备名称、当前工作、最近事件、状态和产物；允许展开日志。
-5. 用户在任务运行中继续发送指令：“把测试交给 Linux”“取消部署”“先让我看一眼截图”。Agent 更新原任务，而不是重新创建独立会话。
-6. Agent 自动收集产物、核对结果，在同一聊天里给出带证据的总结。
+5. 用户在任务运行中继续发送指令：“把测试交给 Linux”“取消部署”“先让我看一眼截图”。Agent 在同一对话关联工作：V1 已接受 DAG 不原地编辑，追加工作创建关联的新 Plan；取消走原 task_id/plan_id，已接受任务不静默迁移。
+6. Coordinator 自动派发显式下游汇总任务并保存报告；Agent 在线时在同一聊天中呈现带证据的总结，手机离线不阻止后继汇总执行。
 7. 关闭手机、换网络、从 PC 打开同一任务时保持 plan_id、步骤状态和事件；不会重新执行已接受操作。
 
 系统内部的 Task DAG、Device Registry、Scheduler、Ledger 必须隐身于常规交互之后，仅高级用户进入详情页查看。
@@ -31,7 +31,7 @@
 ### A. 对话（默认入口）
 - 原 DSH Go 对话、输入、模型和插件控件仍可使用。
 - 用户消息和 Agent 回复之间可出现任务卡、节点执行卡、审批卡、文件卡。
-- 允许在任务运行期间追加消息、引用文件和发出暂停/继续/取消命令。
+- 允许在任务运行期间追加消息、引用文件和暂停后续步骤、恢复调度、处理审批或取消任务。暂停使用 plan.pause，继续使用 plan.resume；已接受进程继续运行，卡片明确展示此语义。
 - 任务卡绑定 plan_id，设备执行卡绑定 task_id + device_id。
 - 事件先合并成易读的阶段描述，调试展开后才显示原始日志，避免刷屏。
 
@@ -40,7 +40,7 @@
 - 中部显示 DAG/步骤列表和设备分工；默认按用户可理解的任务阶段，而不是技术依赖图。
 - 每步显示启动/完成时间、执行设备、工具、结果验证、日志摘要及 Artifact。
 - 下方展示完整事件记录、错误信息和可导出的诊断包。
-- 支持取消指定步骤、重试允许重试的步骤、调整执行节点、审批、打开文件结果。
+- 支持取消指定步骤、重试允许重试的步骤、查看节点选择依据、审批、打开文件结果。
 
 ### C. 设备（次级入口）
 - 设备列表、在线/退化/离线、网络质量、CPU/内存、可用能力、授权状态、Agent 模式。
@@ -70,7 +70,7 @@
 - 控制权属于明确的当前操作者；接管期间 Agent 对对应设备的输入操作暂停。
 - 完成后点击“交还 Agent”，任务从已保存状态继续。
 - 桌面远控需要明确的输入 adapter，不能把截图预览误称作远程控制。
-- V1 必须提供审批/暂停/继续；全功能桌面控制留待 L3 专项验收。
+- V1 提供计划调度暂停/继续（plan.pause / plan.resume）、审批及取消；暂停只阻止后续步骤派发。挂起已运行进程与全功能桌面接管需扩展适配器并单独验收。
 
 ## 5. 对话与任务的关系
 
@@ -83,7 +83,7 @@
 
 ## 6. 必须实现的 UI 事件契约
 
-接口采用现有 dsh-edge/1 Envelope，任务投影事件增加：
+控制报文与展示事件分层，规范来源为 04_PROTOCOL_CONTRACT.md 第 4.8 节。plan.submit / accepted / rejected / cancel / snapshot / pause / resume 是 Envelope.kind；以下为 Event.type 或由持久化事实派生的 UI 投影名：
 - plan.created / plan.updated / plan.completed
 - step.assigned / step.started / step.progress / step.finished
 - node.connection.degraded / node.connection.restored
@@ -92,7 +92,9 @@
 - preview.available（只在确有截屏时）
 - handoff.requested / handoff.released（仅在接管适配器存在时）
 
-UI 在前台通过订阅事件逐步更新；进入页面和网络恢复后先获取服务端 snapshot，再接续 event cursor。卡片不自行推测运行结果。模型总结必须引用后端已记录的验证状态和产物，而不是把“Agent 说完成了”视作成功。
+plan.submit 首次成功与 plan.created 同事务；调度/任务变化生成 plan.updated；首次终态生成一次 plan.completed，payload.status 明确 succeeded/failed/cancelled。plan.rejected 只显示请求错误；plan.snapshot 替换任务卡，不重复生成创建/完成通知。step.* 映射后端任务事实，不作为另一套执行状态机。
+
+UI 由 integrations/dsh-flutter-ui 通过 packages/edge-link-dart 订阅。进入页面时获取全 Fleet 一致快照与 snapshot_coord_seq，随后接大于该屏障的事件；正常恢复携带 last_coord_seq，按 coord_seq 去重并原子保存投影和游标。单 plan.snapshot 只更新卡片及该卡屏障，不能推进全局 last_coord_seq；Worker 的 worker_seq/task_seq 不用作 UI 全局游标。卡片不自行推测运行结果。模型总结必须引用后端已记录的验证状态和产物，而不是把“Agent 说完成了”视作成功。
 
 ## 7. V1 交互验收
 

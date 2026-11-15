@@ -46,7 +46,7 @@ DSH Edge Orchestrator 是面向个人开发者、AI Agent 用户和边缘设备�
 | Capability | 节点可执行动作 | capability_id、version、schema、permission、resource_cost |
 | Plan | 用户目标对应的任务计划 | plan_id、goal、tasks、dependencies、status |
 | Task | 独立派发和追踪的工作单元 | task_id、plan_id、target、input、deadline、idempotency_key |
-| Event | 任务过程的追加记录 | event_id、task_id、seq、type、timestamp、payload |
+| Event | 任务过程的追加记录 | event_id、task_id、worker_seq、task_seq、coord_seq、type、timestamp、payload |
 | Artifact | 文件或结构化产物 | artifact_id、sha256、size、media_type、storage_uri |
 | Approval | 需要用户确认的授权动作 | approval_id、task_id、scope、reason、decision |
 

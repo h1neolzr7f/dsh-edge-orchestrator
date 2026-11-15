@@ -13,7 +13,7 @@
 实现：
 1. Go Coordinator 提供 HTTPS/WSS endpoint。
 2. Go Edge Agent 主动连接 Coordinator，完成 device hello、身份注册和 heartbeat。
-3. Dart/Flutter 最小客户端能查看在线设备。
+3. packages/edge-link-dart 最小客户端能查看在线设备，Flutter UI 与 Node.js Cordis 插件分开。
 4. 同 LAN 与跨公网两种部署模式各跑一次。
 5. 断网 30 秒再恢复，观察连接恢复和状态续接。
 
@@ -24,11 +24,11 @@
 ## Phase 1 — 协议、Coordinator 与 Agent
 
 交付：
-- Device / Capability / Task / Receipt / Event / Artifact Schema。
-- Coordinator 设备注册、配对、连接管理、任务持久化和在线状态。
-- Edge Agent 本地身份、系统探测、心跳和本地 SQLite task ledger。
+- Device / Capability / Plan / Task / Receipt / Event / Artifact Schema，含 workspace_context、input_artifacts 与三层序号。
+- Coordinator 设备注册、配对、连接管理、Plan/Task 持久化和在线状态；常驻内嵌 packages/orchestrator。
+- Edge Agent 本地身份、系统探测、心跳和本地 SQLite local_task_ledger 与持久化 worker_seq。
 - device.inspect capability。
-- Fake Worker 与协议测试。
+- Fake Worker 与协议测试；Phase 0/1 的闭环门槛提前包含最小 DAG：两前置并行、一后继自动解锁、Controller 离线恢复。完整调度评分在 Phase 3 扩展。
 
 出口：真实 Worker 安装 Agent 后自动登记，Controller 可读取平台、架构、CPU、内存、磁盘和 Agent 版本。
 
@@ -38,7 +38,8 @@
 - task.submit / accepted / started / progress / succeeded / failed。
 - Worker 本地任务队列和持久化事件 outbox。
 - process.exec、filesystem.read/write、git.inspect。
-- 任务取消、超时、退出码和 stdout/stderr 摘要。
+- workspace_context 预检、输入产物下载校验、磁盘日志与进程身份三元组。
+- Linux 进程组、Windows Job Object 的取消/超时及 Agent 崩溃恢复。
 - 同 task_id / idempotency_key 重复提交返回原任务，不重复启动进程。
 
 出口：从手机提交一个命令，在 Worker 上执行，返回退出码、日志和产物。
@@ -46,21 +47,22 @@
 ## Phase 3 — 多设备调度与并行
 
 交付：
-- Plan / Task DAG 与依赖关系。
+- 扩展 Coordinator 内嵌 packages/orchestrator 的 Plan / Task DAG；手机只生成并提交计划。
 - Capability matching、资源评分、并发控制。
 - 任务投递队列和离线 Worker 待处理任务。
 - 两台 Worker 并行执行；依赖任务在上游完成后解锁。
-- unknown 状态 reconcile；事件按 seq 去重。
-- 汇总器把多个 Worker 结果合并为统一报告。
+- unknown 状态 reconcile；Worker 事件按 (device_id, worker_seq) 去重，Controller 按 coord_seq 恢复。
+- 显式下游汇总任务消费上游 Artifact；Controller 离线时也由 Coordinator 派发。
 
 出口：手机输入“A 电脑运行测试，B 电脑审查 diff”，两个任务时间窗口重叠，最终返回带证据的汇总。
 
 ## Phase 4 — DSH Go 产品集成（Chat-first，参考 Grok Bot 交互）
 
 交付：
-- Cordis Fleet 插件与独立 Dart client package。
+- integrations/dsh-cordis-plugin：TypeScript / Node.js 引擎层 8 个 Fleet 工具。
+- integrations/dsh-flutter-ui：Flutter 卡片与配对页；依赖 packages/edge-link-dart 订阅快照及事件。
 - 保留 DSH Go 聊天/语音为默认入口；聊天内嵌总任务卡、节点执行卡；设备列表/详情是次级页面。
-- 自然语言/语音目标、计划预览、运行中追加指令、必要时指定 Worker。
+- 自然语言/语音目标、计划预览、运行中追加关联工作（新 Plan 绑定原聊天）、必要时指定 Worker。
 - 聊天中的进度、节点日志摘要、失败原因、结果卡片与可展开时间线。
 - 取消、重试、审批、产物查看。
 - 保留 DSH Go 原有模型配置、Agent Loop、聊天、语音、Phone Control 和插件生态。
@@ -70,9 +72,9 @@
 ## Phase 5 — 网络可靠性与文件传输
 
 交付：
-- 指数退避 + jitter、heartbeat、resume cursor、消息 ACK。
+- 指数退避 + jitter、heartbeat、连接 sequence/ack、Worker last_worker_seq 与 Controller last_coord_seq。
 - Wi-Fi/移动网络切换后重连。
-- Worker 离线任务排队；Controller 离线不影响已接受任务。
+- Worker 离线任务排队；Controller 离线不影响已接受任务及 Coordinator 后继解锁。
 - Artifact 分块上传/下载、断点续传、SHA-256 校验。
 - 连接状态、延迟、最近错误和任务同步状态可视化。
 - 可导出的诊断包。
