@@ -20,6 +20,10 @@ DSH Edge Orchestrator 是围绕 DSH Go 建设的跨设备 Agent 编排系统。�
 - Edge Agent：运行在 Windows/Linux/ARM 设备上的常驻执行节点；Android 使用原生适配器。
 - DS Harness Remote：仅作为可选兼容适配器和代码/协议参考，不在核心链路中。
 
+## 交互原则：像 Grok Bot 一样委派工作
+
+**聊天是默认入口，Fleet 在背后自主调度设备。** 用户只需自然语言/语音交代目标；聊天中出现跨设备任务卡、执行进度和结果。任务持续运行并支持网络恢复。能否看画面、能否人工接管取决于设备适配器，不以空白预览假冒已实现能力。详见 [交互体验规范](docs/10_CHAT_FIRST_UX.md)。
+
 ## V1 要交付什么
 
 1. DSH Go 手机端作为统一控制入口。
@@ -73,6 +77,7 @@ flowchart TB
 - [验收与测试计划](docs/07_VALIDATION.md)
 - [开源复用与技术调研](docs/08_REUSE_AND_RESEARCH.md)
 - [网络可靠性设计](docs/09_NETWORK_RELIABILITY.md)
+- [Grok Bot 式交互体验规范](docs/10_CHAT_FIRST_UX.md)
 - [实施 Backlog](docs/IMPLEMENTATION_BACKLOG.md)
 - [架构决策记录](docs/decisions/)
 
