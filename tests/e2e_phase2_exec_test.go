@@ -372,7 +372,7 @@ func TestPhase2AgentRestartResumesProcessLogs(t *testing.T) {
 func TestPhase2CancelledProcessDrainsLogBacklog(t *testing.T) {
 	// The 8 MiB event integrity stress is deliberately separate from the hard
 	// two-second process-tree stop test; -race instruments the pure-Go SQLite VM.
-	e := newPhase2(t, 60*time.Second)
+	e := newPhase2(t, 120*time.Second)
 	defer func() {
 		if t.Failed() {
 			db, err := sql.Open("sqlite", e.cfgA.DBPath)
@@ -423,7 +423,7 @@ func TestPhase2CancelledProcessDrainsLogBacklog(t *testing.T) {
 	}
 }
 func TestPhase2CancellationPersistsAcrossAgentRestart(t *testing.T) {
-	e := newPhase2(t)
+	e := newPhase2(t, 30*time.Second)
 	exe, _ := os.Executable()
 	job := task("persist_cancel", "process.exec", map[string]any{"program": exe, "args": []string{"--phase2-workload", "sleep"}, "cwd": "workspace/project", "timeout_ms": 60000})
 	p := protocol.PlanEnvelope{PlanID: "persist_cancel_plan", IdempotencyKey: "persist:cancel", Goal: "recover cancellation", ConcurrencyLimit: 1, CreatedAt: time.Now().UTC(), Tasks: []protocol.TaskEnvelope{job}}
@@ -468,7 +468,9 @@ func TestPhase2CancellationPersistsAcrossAgentRestart(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	})
-	check, cancel := context.WithTimeout(e.ctx, 2*time.Second)
+	// Recovery includes reconnect/startup and the instrumented runner's exit;
+	// the separate live process-tree cancellation test retains its 2s bound.
+	check, cancel := context.WithTimeout(e.ctx, 10*time.Second)
 	defer cancel()
 	await(t, check, func() bool { s, err := e.c.Plan(check, p.PlanID); return err == nil && s.Status == "cancelled" })
 	db, err = sql.Open("sqlite", e.cfgA.DBPath)

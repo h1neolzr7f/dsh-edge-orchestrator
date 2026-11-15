@@ -49,7 +49,7 @@ B1、B3、B4、B5 的原代码都已运行出对应行为失败；B2 的新游�
 - 并行按完整 task.running 区间验证，其中包含任务书要求的 claim 后 Git 预检；原 Phase 1 的双 Worker 屏障测试继续证明真实并发。没有用极短 Git 子命令与另一程序启动瞬间的偶然重叠判断调度是否并行。
 - 受管 PID 为独立 runner：Linux pgid=runner pid，用户程序继承其组；Windows runner 持有命名 Job。这样同时满足进程树清理与 Agent 重启存续。
 - 默认 SIGTERM 宽限按本轮任务书设为 500ms，可配置；更新了旧设计文档中的 5 秒默认值。自行 setsid 脱组的 daemon 不在 V1 process.exec 范围。
-- 8 MiB 完整性压力测试在纯 Go SQLite 的 -race 模式下开销明显，使用独立 60 秒测试预算；2 秒进程树清理测试仍单独保留严格时限。普通文件日志落盘、事件 outbox、网络传输、Coordinator ACK 是分层检查，没有把本地 offset 追平等同于已发送成功。
+- 8 MiB 完整性压力测试在纯 Go SQLite 的 -race 模式下开销明显，使用独立 120 秒测试预算；2 秒进程树清理测试仍单独保留严格时限。普通文件日志落盘、事件 outbox、网络传输、Coordinator ACK 是分层检查，没有把本地 offset 追平等同于已发送成功。
 - 文件路径与 cwd 受到授权映射约束；显式授权的 shell/解释器可运行其脚本，不将程序白名单描述为内核级文件系统隔离。
 - input_artifacts、input_artifact_bindings、patch_artifact_id 的传输仍未实现，执行请求会明确拒绝。Artifact、手机 Flutter/Cordis 集成和公网/蜂窝弱网真机属于后续范围。
 - 本机运行验收为 Linux amd64；Windows/ARM 的交叉编译成功不能代替原生运行验收。Windows 进程生命周期代码包含挂起入 Job、启动时间校验和 Job 清理，但没有据此宣称本机已运行 Windows 测试。
@@ -77,8 +77,10 @@ B1、B3、B4、B5 的原代码都已运行出对应行为失败；B2 的新游�
 
 PR #3 的首次 Windows 原生运行暴露了交叉编译无法发现的问题：8.3 临时路径与长路径比较使任务独立 worktree 被误判为越界；8 MiB 日志逐块提交产生较高落盘开销；Job 已无子进程时 runner 尚未退出，任务提前终态可能留下临时文件占用。复验还发现通用 execute 的取消检查会在恢复监控前直接返回；Linux 虽能删除被占用目录，也存在相同的残留 runner 问题。
 
-修复将 Agent 数据目录与授权目录统一为 EvalSymlinks 的规范路径，新增 TestDataDirectoryUsesCanonicalPath（先失败再通过）；日志每批最多 16 块在同一事务内原子保存事件和偏移；终态要求 runner 身份已不存活，握手恢复测试额外断言 runner 已退出；已取消的恢复 process.exec 允许进入清理监控，持久取消 E2E 在终态后查询 runner PID 并确认不再存活，该断言在修复前于 Linux 同样失败。随后原生运行全部根集成测试通过，继续运行模块单测时还暴露 Windows filepath.IsAbs 对无盘符 /etc/passwd 返回 false；现显式拒绝规范化后的前导斜杠，原有路径约束回归在 Windows 也适用。保留 4 KiB 日志粒度、60 秒完整性压力预算和独立的 2 秒进程树取消要求。
+修复将 Agent 数据目录与授权目录统一为 EvalSymlinks 的规范路径，新增 TestDataDirectoryUsesCanonicalPath（先失败再通过）；日志每批最多 16 块在同一事务内原子保存事件和偏移；终态要求 runner 身份已不存活，握手恢复测试额外断言 runner 已退出；已取消的恢复 process.exec 允许进入清理监控，持久取消 E2E 在终态后查询 runner PID 并确认不再存活，该断言在修复前于 Linux 同样失败。随后原生运行全部根集成测试通过，继续运行模块单测时还暴露 Windows filepath.IsAbs 对无盘符 /etc/passwd 返回 false；现显式拒绝规范化后的前导斜杠，原有路径约束回归在 Windows 也适用。保留 4 KiB 日志粒度、120 秒完整性压力预算和独立的 2 秒进程树取消要求。
 
 Windows 常规检查全部通过后，首次原生 -race 又发现 NtQuerySystemInformation 的字节数组缓冲区不保证 8 字节对齐，进程身份读取返回 STATUS_DATATYPE_MISALIGNMENT；改为 uint64 数组提供对齐存储，保留原有进程身份与恢复测试验证该路径。
 
 本地重新执行全模块检查、竞态检测和九目标构建。最终 Windows/Linux 原生 CI 状态可从 [PR #3 检查页](https://github.com/h1neolzr7f/dsh-edge-orchestrator/pull/3/checks) 核对；本机报告仍仅代表 Linux 运行结果。
+
+Windows -race 修复对齐后，进程身份、启动、进程树取消与模块测试通过；8 MiB 压力案例在 60 秒处本地 ledger 已 cancelled、offset=8388608/8388608，Coordinator ACK=1375/2051，失败来自事件确认预算。压力预算调整为 120 秒，不改变字节数、偏移相等和最终服务端终态断言。重启取消案例的恢复等待调整为 10 秒（含重新打开 Agent 与 runner 退出），另一个普通进程树取消测试继续严格验证 2 秒停止。
