@@ -1,0 +1,12 @@
+{
+  "plan_id": "plan_phase1_demo",
+  "idempotency_key": "demo:turn1",
+  "goal": "两台设备并行盘点，汇总设备报告",
+  "concurrency_limit": 2,
+  "created_at": "2026-11-15T12:00:00Z",
+  "tasks": [
+    {"task_id":"inspect_win","target_device_id":"worker-win-sim","capability":{"id":"device.inspect","version":">=1.0 <2.0"},"input":{},"depends_on":[]},
+    {"task_id":"inspect_linux","target_device_id":"worker-linux-sim","capability":{"id":"device.inspect","version":">=1.0 <2.0"},"input":{},"depends_on":[]},
+    {"task_id":"summary","target_device_id":"worker-linux-sim","capability":{"id":"report.aggregate","version":">=1.0 <2.0"},"input":{},"depends_on":["inspect_win","inspect_linux"]}
+  ]
+}

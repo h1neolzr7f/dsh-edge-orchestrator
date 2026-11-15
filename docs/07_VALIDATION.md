@@ -76,7 +76,7 @@
 
 ## 7.9 本轮协议修订的验收矩阵（待代码阶段执行）
 
-下表是必须实现的测试，不代表已测试通过。当前仓库仅有架构文档；文档检查不能替代运行验收。
+下表是必须实现的测试，不代表已测试通过。Phase 0/1 已实现的运行检查见 PHASE1_QUICKSTART.md；其余矩阵仍待对应阶段实现，文档检查不能替代运行验收。
 
 | 项目 | 注入条件 | 通过条件 |
 |---|---|---|
@@ -102,7 +102,7 @@
 
 ## 7.10 Phase 0/1 最小代码闭环门槛
 
-用户确认文档后开始代码实现。Go 1.22+ Workspace 管理 apps/coordinator、apps/edge-agent、apps/edge-cli、packages/protocol、packages/edge-link；Coordinator 内嵌 packages/orchestrator（建模块时加入 go.work）。SQLite 使用纯 Go 驱动，不依赖 CGO。
+用户已确认文档并启动 Phase 0/1 实现。Go 1.22+ Workspace 管理 apps/coordinator、apps/edge-agent、apps/edge-cli、packages/protocol、packages/edge-link；Coordinator 内嵌 packages/orchestrator（建模块时加入 go.work）。SQLite 使用纯 Go 驱动，不依赖 CGO。
 
 `tests/e2e_phase0_phase1_test.go` 必须在临时目录真实启动 Coordinator、SQLite 及两个 Agent（worker-win-sim / worker-linux-sim），验证：
 

@@ -1,0 +1,877 @@
+{
+  "$defs": {
+    "ArtifactBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "from_task_id": {
+          "type": "string"
+        },
+        "mount_path": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from_task_id",
+        "name",
+        "mount_path"
+      ],
+      "type": "object"
+    },
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "download_uri": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "task_id",
+        "name",
+        "media_type",
+        "size_bytes",
+        "sha256",
+        "download_uri"
+      ],
+      "type": "object"
+    },
+    "CapabilityManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "authorized": {
+          "type": "boolean"
+        },
+        "capability_id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "discovery": {
+          "type": "string"
+        },
+        "input_schema": {},
+        "max_concurrency": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "output_schema": {},
+        "permission_scope": {
+          "type": "string"
+        },
+        "resource_class": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "capability_id",
+        "version",
+        "description",
+        "input_schema",
+        "output_schema",
+        "permission_scope",
+        "resource_class",
+        "max_concurrency",
+        "discovery",
+        "authorized"
+      ],
+      "type": "object"
+    },
+    "CapabilityRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ClientHello": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_version": {
+          "type": "string"
+        },
+        "device_id": {
+          "type": "string"
+        },
+        "last_coord_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "last_worker_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pending_message_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "protocol_versions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "device_id",
+        "agent_version",
+        "protocol_versions",
+        "pending_message_ids"
+      ],
+      "type": "object"
+    },
+    "DeviceManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_version": {
+          "type": "string"
+        },
+        "capabilities_revision": {
+          "type": "integer"
+        },
+        "device_id": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "labels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "platform": {
+          "$ref": "#/$defs/Platform"
+        },
+        "resources": {
+          "$ref": "#/$defs/Resources"
+        }
+      },
+      "required": [
+        "device_id",
+        "display_name",
+        "platform",
+        "agent_version",
+        "labels",
+        "resources",
+        "capabilities_revision"
+      ],
+      "type": "object"
+    },
+    "DeviceRegistration": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/CapabilityManifest"
+          },
+          "type": "array"
+        },
+        "manifest": {
+          "$ref": "#/$defs/DeviceManifest"
+        }
+      },
+      "required": [
+        "manifest",
+        "capabilities"
+      ],
+      "type": "object"
+    },
+    "DeviceSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_version": {
+          "type": "string"
+        },
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/CapabilityManifest"
+          },
+          "type": "array"
+        },
+        "capabilities_revision": {
+          "type": "integer"
+        },
+        "device_id": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "labels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "online": {
+          "type": "boolean"
+        },
+        "platform": {
+          "$ref": "#/$defs/Platform"
+        },
+        "resources": {
+          "$ref": "#/$defs/Resources"
+        }
+      },
+      "required": [
+        "device_id",
+        "display_name",
+        "platform",
+        "agent_version",
+        "labels",
+        "resources",
+        "capabilities_revision",
+        "capabilities",
+        "online"
+      ],
+      "type": "object"
+    },
+    "Envelope": {
+      "additionalProperties": false,
+      "properties": {
+        "ack": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "payload": {},
+        "protocol": {
+          "const": "dsh-edge/1"
+        },
+        "sent_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "sequence": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "protocol",
+        "message_id",
+        "kind",
+        "sent_at",
+        "correlation_id",
+        "sequence",
+        "ack",
+        "payload"
+      ],
+      "type": "object"
+    },
+    "Error": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "EventAck": {
+      "additionalProperties": false,
+      "properties": {
+        "last_worker_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "last_worker_seq"
+      ],
+      "type": "object"
+    },
+    "EventPage": {
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "items": {
+            "$ref": "#/$defs/TaskEvent"
+          },
+          "type": "array"
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "high_watermark": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "next_coord_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "events",
+        "next_coord_seq",
+        "high_watermark",
+        "has_more"
+      ],
+      "type": "object"
+    },
+    "EventPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/Error"
+        },
+        "result": {},
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "FleetSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "devices": {
+          "items": {
+            "$ref": "#/$defs/DeviceSnapshot"
+          },
+          "type": "array"
+        },
+        "plans": {
+          "items": {
+            "$ref": "#/$defs/PlanSnapshot"
+          },
+          "type": "array"
+        },
+        "snapshot_coord_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "devices",
+        "plans",
+        "snapshot_coord_seq"
+      ],
+      "type": "object"
+    },
+    "InputArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "mount_path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "sha256",
+        "mount_path"
+      ],
+      "type": "object"
+    },
+    "PlanAccepted": {
+      "additionalProperties": false,
+      "properties": {
+        "coord_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_id",
+        "status",
+        "coord_seq"
+      ],
+      "type": "object"
+    },
+    "PlanEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "concurrency_limit": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "goal": {
+          "type": "string"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/TaskEnvelope"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "plan_id",
+        "idempotency_key",
+        "goal",
+        "concurrency_limit",
+        "created_at",
+        "tasks"
+      ],
+      "type": "object"
+    },
+    "PlanSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "cancel_requested": {
+          "type": "boolean"
+        },
+        "plan": {
+          "$ref": "#/$defs/PlanEnvelope"
+        },
+        "scheduling_paused": {
+          "type": "boolean"
+        },
+        "snapshot_coord_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/TaskSnapshot"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "plan",
+        "status",
+        "scheduling_paused",
+        "cancel_requested",
+        "tasks",
+        "snapshot_coord_seq"
+      ],
+      "type": "object"
+    },
+    "Platform": {
+      "additionalProperties": false,
+      "properties": {
+        "arch": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "os",
+        "arch",
+        "version"
+      ],
+      "type": "object"
+    },
+    "Resources": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu_threads": {
+          "type": "integer"
+        },
+        "disk_free_bytes": {
+          "type": "integer"
+        },
+        "memory_bytes": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cpu_threads",
+        "memory_bytes",
+        "disk_free_bytes"
+      ],
+      "type": "object"
+    },
+    "Resume": {
+      "additionalProperties": false,
+      "properties": {
+        "after_coord_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "high_watermark": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "last_worker_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "snapshot_required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "last_worker_seq"
+      ],
+      "type": "object"
+    },
+    "ServerWelcome": {
+      "additionalProperties": false,
+      "properties": {
+        "connection_id": {
+          "type": "string"
+        },
+        "heartbeat_interval": {
+          "type": "integer"
+        },
+        "resume": {
+          "$ref": "#/$defs/Resume"
+        },
+        "selected_protocol": {
+          "type": "string"
+        },
+        "server_time": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "connection_id",
+        "server_time",
+        "selected_protocol",
+        "heartbeat_interval",
+        "resume"
+      ],
+      "type": "object"
+    },
+    "TaskEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "$ref": "#/$defs/CapabilityRef"
+        },
+        "deadline": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "input": {
+          "type": "object"
+        },
+        "input_artifact_bindings": {
+          "items": {
+            "$ref": "#/$defs/ArtifactBinding"
+          },
+          "type": "array"
+        },
+        "input_artifacts": {
+          "items": {
+            "$ref": "#/$defs/InputArtifact"
+          },
+          "type": "array"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "string"
+        },
+        "replay_policy": {
+          "type": "string"
+        },
+        "requested_permissions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target_device_id": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "workspace_context": {
+          "$ref": "#/$defs/WorkspaceContext"
+        }
+      },
+      "required": [
+        "task_id",
+        "capability",
+        "input",
+        "depends_on"
+      ],
+      "type": "object"
+    },
+    "TaskEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "coord_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "device_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "payload": {},
+        "plan_id": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "task_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "worker_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "plan_id",
+        "type",
+        "timestamp",
+        "payload"
+      ],
+      "type": "object"
+    },
+    "TaskReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "device_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "task_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "task_id",
+        "device_id",
+        "status",
+        "accepted_at",
+        "task_seq"
+      ],
+      "type": "object"
+    },
+    "TaskReconcileSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "device_id": {
+          "type": "string"
+        },
+        "error": {
+          "$ref": "#/$defs/Error"
+        },
+        "status": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "task_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "task_id",
+        "device_id",
+        "task_seq"
+      ],
+      "type": "object"
+    },
+    "TaskRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "TaskSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          },
+          "type": "array"
+        },
+        "error": {
+          "$ref": "#/$defs/Error"
+        },
+        "result": {},
+        "status": {
+          "type": "string"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskEnvelope"
+        },
+        "task_seq": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "task",
+        "status",
+        "task_seq",
+        "artifacts"
+      ],
+      "type": "object"
+    },
+    "WorkspaceContext": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_git_head": {
+          "type": "string"
+        },
+        "patch_artifact_id": {
+          "type": "string"
+        },
+        "policy": {
+          "type": "string"
+        },
+        "root_dir": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root_dir",
+        "expected_git_head",
+        "policy"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:dsh-edge:protocol:1",
+  "$ref": "#/$defs/Envelope",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
