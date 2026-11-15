@@ -81,7 +81,7 @@ func confinedPath(root, rel string) (string, error) {
 		return "", protocol.Err("PATH_OUTSIDE_WORKSPACE", "path must remain within an authorized workspace")
 	}
 	rel = strings.ReplaceAll(rel, "\\", "/")
-	if filepath.IsAbs(rel) || strings.ContainsAny(rel, ":\x00") {
+	if strings.HasPrefix(rel, "/") || filepath.IsAbs(rel) || strings.ContainsAny(rel, ":\x00") {
 		return deny()
 	}
 	for _, part := range strings.Split(rel, "/") {
