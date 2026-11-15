@@ -16,7 +16,11 @@ func configureRunner(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW}
 }
 func bootID() (string, error) {
-	var b [64]byte
+	// NtQuerySystemInformation requires an eight-byte-aligned buffer. A byte
+	// array has alignment one, which can trigger STATUS_DATATYPE_MISALIGNMENT
+	// when race instrumentation changes its allocation layout.
+	var aligned [8]uint64
+	b := unsafe.Slice((*byte)(unsafe.Pointer(&aligned[0])), int(unsafe.Sizeof(aligned)))
 	var n uint32
 	e := windows.NtQuerySystemInformation(windows.SystemBootEnvironmentInformation, unsafe.Pointer(&b[0]), uint32(len(b)), &n)
 	if e == nil {

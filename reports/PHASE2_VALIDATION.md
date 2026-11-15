@@ -79,4 +79,6 @@ PR #3 的首次 Windows 原生运行暴露了交叉编译无法发现的问题�
 
 修复将 Agent 数据目录与授权目录统一为 EvalSymlinks 的规范路径，新增 TestDataDirectoryUsesCanonicalPath（先失败再通过）；日志每批最多 16 块在同一事务内原子保存事件和偏移；终态要求 runner 身份已不存活，握手恢复测试额外断言 runner 已退出；已取消的恢复 process.exec 允许进入清理监控，持久取消 E2E 在终态后查询 runner PID 并确认不再存活，该断言在修复前于 Linux 同样失败。随后原生运行全部根集成测试通过，继续运行模块单测时还暴露 Windows filepath.IsAbs 对无盘符 /etc/passwd 返回 false；现显式拒绝规范化后的前导斜杠，原有路径约束回归在 Windows 也适用。保留 4 KiB 日志粒度、60 秒完整性压力预算和独立的 2 秒进程树取消要求。
 
+Windows 常规检查全部通过后，首次原生 -race 又发现 NtQuerySystemInformation 的字节数组缓冲区不保证 8 字节对齐，进程身份读取返回 STATUS_DATATYPE_MISALIGNMENT；改为 uint64 数组提供对齐存储，保留原有进程身份与恢复测试验证该路径。
+
 本地重新执行全模块检查、竞态检测和九目标构建。最终 Windows/Linux 原生 CI 状态可从 [PR #3 检查页](https://github.com/h1neolzr7f/dsh-edge-orchestrator/pull/3/checks) 核对；本机报告仍仅代表 Linux 运行结果。
