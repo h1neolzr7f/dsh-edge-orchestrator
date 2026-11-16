@@ -71,7 +71,7 @@ func (s *Server) artifactsHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		u, e := s.uploadBy("task_id=? AND name=?", in.TaskID, in.Name)
 		if e == nil {
-			if u.Hash != in.SHA256 || u.Size != in.SizeBytes || u.Plan != in.PlanID || u.Media != in.MediaType {
+			if u.Hash != in.SHA256 || u.Size != in.SizeBytes || u.Plan != in.PlanID {
 				fail(protocol.Err("IDEMPOTENCY_CONFLICT", "artifact content changed"))
 				return
 			}

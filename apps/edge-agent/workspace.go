@@ -218,14 +218,15 @@ func (a *Agent) prepareTask(ctx context.Context, t protocol.TaskEnvelope) (conte
 		if e := os.MkdirAll(dir, 0700); e != nil {
 			return ctx, e
 		}
-		if e := a.mountArtifacts(ctx, t, dir); e != nil {
-			return ctx, e
-		}
 		logical := a.artifactWorkspace(t)
 		if _, err := a.resolveWorkspacePath(logical, "."); err != nil {
 			return ctx, err
 		}
-		return context.WithValue(ctx, workspaceKey{}, preparedWorkspace{logical, dir}), nil
+		prepared := context.WithValue(ctx, workspaceKey{}, preparedWorkspace{logical, dir})
+		if e := a.mountTaskArtifacts(prepared, t, dir); e != nil {
+			return ctx, e
+		}
+		return prepared, nil
 	}
 
 	root, e := a.resolveWorkspacePath(w.RootDir, ".")
@@ -261,10 +262,11 @@ func (a *Agent) prepareTask(ctx context.Context, t protocol.TaskEnvelope) (conte
 			return ctx, protocol.Err("WORKSPACE_MISMATCH", err.Error())
 		}
 	}
-	if e = a.mountArtifacts(ctx, t, dir); e != nil {
+	prepared := context.WithValue(ctx, workspaceKey{}, preparedWorkspace{w.RootDir, dir})
+	if e = a.mountTaskArtifacts(prepared, t, dir); e != nil {
 		return ctx, e
 	}
-	return context.WithValue(ctx, workspaceKey{}, preparedWorkspace{w.RootDir, dir}), nil
+	return prepared, nil
 }
 func (a *Agent) allowedProgram(program string) (string, error) {
 	key := program
@@ -307,3 +309,24 @@ func hashFile(ctx context.Context, f *os.File) (string, error) {
 }
 func nowUTC() time.Time                            { return time.Now().UTC() }
 func marshalResult(v any) (json.RawMessage, error) { b, e := json.Marshal(v); return b, e }
+
+// Input mount paths are relative to the same directory used by process.exec.
+func (a *Agent) mountTaskArtifacts(ctx context.Context, t protocol.TaskEnvelope, root string) error {
+	if t.Capability.ID == "process.exec" {
+		var in struct {
+			CWD string `json:"cwd"`
+		}
+		if e := json.Unmarshal(t.Input, &in); e != nil {
+			return e
+		}
+		dir, e := a.processDir(ctx, in.CWD)
+		if e != nil {
+			return e
+		}
+		if e = os.MkdirAll(dir, 0700); e != nil {
+			return e
+		}
+		root = dir
+	}
+	return a.mountArtifacts(ctx, t, root)
+}

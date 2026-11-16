@@ -155,7 +155,7 @@ func (s *Server) schedule() error {
 					for _, b := range t.InputArtifactBindings {
 						var a protocol.InputArtifact
 						a.MountPath = b.MountPath
-						err := tx.QueryRow(`SELECT id,sha256 FROM artifacts WHERE task_id=? AND name=?`, b.FromTaskID, b.Name).Scan(&a.ArtifactID, &a.SHA256)
+						err := tx.QueryRow(`SELECT id,sha256 FROM artifacts WHERE plan_id=? AND task_id=? AND name=?`, id, b.FromTaskID, b.Name).Scan(&a.ArtifactID, &a.SHA256)
 						if err == sql.ErrNoRows {
 							bindingFailed = true
 							break

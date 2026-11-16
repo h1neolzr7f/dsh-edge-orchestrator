@@ -209,3 +209,75 @@ func TestArtifactScratchUsesDeclaredAuthorizedWorkspace(t *testing.T) {
 		t.Fatalf("custom logical scratch: %s %v", out, e)
 	}
 }
+
+func TestArtifactNestedProcessMount(t *testing.T) {
+	data := []byte("nested")
+	h := sha256.Sum256(data)
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"`+hex.EncodeToString(h[:])+`"`)
+		w.Write(data)
+	}))
+	defer ts.Close()
+	a, e := Open(Config{DBPath: filepath.Join(t.TempDir(), "agent.db"), DeviceID: "w", Token: "secret", CoordinatorURL: ts.URL, HTTPClient: ts.Client()})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer a.Close()
+	task := artifactTask("nested", hex.EncodeToString(h[:]))
+	task.Capability.ID = "process.exec"
+	task.Input = json.RawMessage(`{"program":"go","cwd":"workspace/project/sub/deep"}`)
+	ctx, e := a.prepareTask(context.Background(), task)
+	if e != nil {
+		t.Fatal(e)
+	}
+	dir, e := a.processDir(ctx, "workspace/project/sub/deep")
+	if e != nil {
+		t.Fatal(e)
+	}
+	b, e := os.ReadFile(filepath.Join(dir, "input"))
+	if e != nil || string(b) != "nested" {
+		t.Fatalf("nested cwd mount %q: %v", b, e)
+	}
+}
+
+func TestArtifactClaimBoundaryGuards(t *testing.T) {
+	for _, shutdown := range []bool{false, true} {
+		t.Run(fmt.Sprint(shutdown), func(t *testing.T) {
+			a, e := Open(Config{DBPath: filepath.Join(t.TempDir(), "agent.db"), DeviceID: "w", Token: "secret", CoordinatorURL: "https://localhost"})
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer a.Close()
+			task := artifactTask("boundary", strings.Repeat("0", 64))
+			task.InputArtifacts = nil
+			if !shutdown {
+				deadline := time.Now().Add(-time.Second)
+				task.Deadline = &deadline
+			}
+			if _, _, e = a.Accept(task); e != nil {
+				t.Fatal(e)
+			}
+			if shutdown {
+				a.cancel()
+			}
+			claimed, e := a.claim(task)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if claimed {
+				t.Error("claimed task with expired execution context")
+			}
+			if n, _ := a.ExecutionCount(task.TaskID); n != 0 {
+				t.Errorf("execution count=%d", n)
+			}
+			snap, e := a.taskSnapshot(task.TaskID)
+			want := "failed"
+			if shutdown {
+				want = "accepted"
+			}
+			if e != nil || snap.Status != want {
+				t.Fatalf("status=%s want=%s %v", snap.Status, want, e)
+			}
+		})
+	}
+}

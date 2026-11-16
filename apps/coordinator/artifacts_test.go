@@ -127,3 +127,76 @@ func TestArtifactMissingBindingRejectedWhileSchedulingPaused(t *testing.T) {
 		t.Fatalf("ready missing binding was gated by pause: %s %v", status, e)
 	}
 }
+
+func TestArtifactRetryAlternateMediaKeepsOriginal(t *testing.T) {
+	s := setup(t)
+	ts := httptest.NewTLSServer(s.Handler())
+	defer ts.Close()
+	c := edgelink.NewClient(ts.URL, "controller", ts.Client())
+	ctx := context.Background()
+	h := sha256.Sum256([]byte("same"))
+	in := protocol.ArtifactUploadRequest{PlanID: "future", TaskID: "stage_media", Name: "patch", MediaType: "text/plain", SizeBytes: 4, SHA256: hex.EncodeToString(h[:])}
+	first, e := c.CreateArtifactUpload(ctx, in)
+	if e != nil {
+		t.Fatal(e)
+	}
+	in.MediaType = "application/octet-stream"
+	again, e := c.CreateArtifactUpload(ctx, in)
+	if e != nil || again != first {
+		t.Fatalf("same content media retry: %v %v", again, e)
+	}
+	if _, e = c.UploadArtifactChunk(ctx, first.UploadID, 0, []byte("same")); e != nil {
+		t.Fatal(e)
+	}
+	ref, e := c.CompleteArtifactUpload(ctx, first.UploadID)
+	if e != nil || ref.MediaType != "text/plain" {
+		t.Fatalf("original metadata: %+v %v", ref, e)
+	}
+}
+
+func TestArtifactProvenanceDoesNotLeakIntoPlan(t *testing.T) {
+	s := setup(t)
+	ts := httptest.NewTLSServer(s.Handler())
+	defer ts.Close()
+	c := edgelink.NewClient(ts.URL, "controller", ts.Client())
+	ctx := context.Background()
+	h := sha256.Sum256(nil)
+	u, e := c.CreateArtifactUpload(ctx, protocol.ArtifactUploadRequest{PlanID: "unrelated", TaskID: "t", Name: "foreign", MediaType: "text/plain", SHA256: hex.EncodeToString(h[:])})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = c.CompleteArtifactUpload(ctx, u.UploadID); e != nil {
+		t.Fatal(e)
+	}
+	p := samplePlan()
+	next := p.Tasks[0]
+	next.TaskID = "downstream"
+	next.DependsOn = []string{"t"}
+	next.InputArtifactBindings = []protocol.ArtifactBinding{{FromTaskID: "t", Name: "foreign", MountPath: "input"}}
+	p.Tasks = append(p.Tasks, next)
+	_, e = s.Submit(p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	snap, e := s.Plan(p.PlanID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, task := range snap.Tasks {
+		if len(task.Artifacts) != 0 {
+			t.Error("foreign staged artifact leaked into snapshot")
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, e = s.db.Exec(`UPDATE plans SET paused=1 WHERE id='p'; UPDATE tasks SET status='succeeded' WHERE id='t'`); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.schedule(); e != nil {
+		t.Fatal(e)
+	}
+	var status string
+	if e = s.db.QueryRow(`SELECT status FROM tasks WHERE id='downstream'`).Scan(&status); e != nil || status != "rejected" {
+		t.Fatalf("foreign symbolic binding status=%s %v", status, e)
+	}
+}

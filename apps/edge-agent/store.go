@@ -99,6 +99,10 @@ func appendEvent(tx *sql.Tx, device string, t protocol.TaskEnvelope, kind string
 func (a *Agent) claim(t protocol.TaskEnvelope) (bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	// Shutdown leaves accepted preflight recoverable; no started event is emitted.
+	if a.closed || a.ctx.Err() != nil {
+		return false, nil
+	}
 	tx, e := a.db.Begin()
 	if e != nil {
 		return false, e
@@ -117,6 +121,12 @@ func (a *Agent) claim(t protocol.TaskEnvelope) (bool, error) {
 	}
 	if cancelled > 0 {
 		if e = appendEvent(tx, a.cfg.DeviceID, t, "task.cancelled", protocol.EventPayload{}, "cancelled"); e != nil {
+			return false, e
+		}
+		return false, tx.Commit()
+	}
+	if t.Deadline != nil && !time.Now().Before(*t.Deadline) {
+		if e = appendEvent(tx, a.cfg.DeviceID, t, "task.failed", protocol.EventPayload{Error: &protocol.Error{Code: "DEADLINE_EXCEEDED", Message: "task deadline exceeded during preflight"}}, "failed"); e != nil {
 			return false, e
 		}
 		return false, tx.Commit()

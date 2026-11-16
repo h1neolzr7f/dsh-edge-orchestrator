@@ -116,7 +116,7 @@ func loadPlan(tx *sql.Tx, id string) (protocol.PlanSnapshot, error) {
 		return p, e
 	}
 	for i := range p.Tasks {
-		ar, err := tx.Query(`SELECT id,name,media_type,size_bytes,sha256 FROM artifacts WHERE task_id=? ORDER BY name`, p.Tasks[i].Task.TaskID)
+		ar, err := tx.Query(`SELECT id,name,media_type,size_bytes,sha256 FROM artifacts WHERE plan_id=? AND task_id=? ORDER BY name`, id, p.Tasks[i].Task.TaskID)
 		if err != nil {
 			return p, err
 		}
