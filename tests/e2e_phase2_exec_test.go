@@ -74,13 +74,14 @@ func TestMain(m *testing.M) {
 }
 
 type phase2Env struct {
-	cfgA agent.Config
-	c    *edgelink.Client
-	s    *coordinator.Server
-	a, b *agent.Agent
-	root string
-	head string
-	ctx  context.Context
+	cfgA        agent.Config
+	c           *edgelink.Client
+	s           *coordinator.Server
+	a, b        *agent.Agent
+	root        string
+	artifactDir string
+	head        string
+	ctx         context.Context
 }
 
 func newPhase2(t *testing.T, budgets ...time.Duration) *phase2Env {
@@ -105,7 +106,8 @@ func newPhase2(t *testing.T, budgets ...time.Duration) *phase2Env {
 	git("add", ".")
 	git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial")
 	head := git("rev-parse", "HEAD")
-	s, e := coordinator.Open(coordinator.Config{DBPath: filepath.Join(t.TempDir(), "c.db"), ControllerToken: "c", WorkerTokens: map[string]string{"worker-a": "a-secret", "worker-b": "b-secret"}})
+	coordinatorDir := t.TempDir()
+	s, e := coordinator.Open(coordinator.Config{DBPath: filepath.Join(coordinatorDir, "c.db"), ControllerToken: "c", WorkerTokens: map[string]string{"worker-a": "a-secret", "worker-b": "b-secret"}})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -128,7 +130,7 @@ func newPhase2(t *testing.T, budgets ...time.Duration) *phase2Env {
 	}
 	c := edgelink.NewClient(ts.URL, "c", ts.Client())
 	await(t, ctx, func() bool { d, e := c.Devices(ctx); return e == nil && len(d) == 2 && d[0].Online && d[1].Online })
-	return &phase2Env{cfgA: configs[0], c: c, s: s, a: workers[0], b: workers[1], root: root, head: head, ctx: ctx}
+	return &phase2Env{cfgA: configs[0], c: c, s: s, a: workers[0], b: workers[1], root: root, artifactDir: filepath.Join(coordinatorDir, "artifacts"), head: head, ctx: ctx}
 }
 func input(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
 func (e *phase2Env) run(t *testing.T, tasks ...protocol.TaskEnvelope) protocol.PlanSnapshot {

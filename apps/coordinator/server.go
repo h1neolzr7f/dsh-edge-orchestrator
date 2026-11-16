@@ -26,18 +26,20 @@ type Config struct {
 	WorkerTokens    map[string]string
 }
 type Server struct {
-	cfg          Config
-	db           *sql.DB
-	mu           sync.Mutex
-	sessions     map[string]*session
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
-	closeOnce    sync.Once
-	closing      bool
-	lastError    error
-	artifactDir  string
-	artifactTemp bool
+	cfg           Config
+	db            *sql.DB
+	mu            sync.Mutex
+	sessions      map[string]*session
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	closeOnce     sync.Once
+	closing       bool
+	lastError     error
+	artifactDir   string
+	artifactTemp  bool
+	artifactMu    sync.Mutex
+	artifactLocks map[string]*artifactLock
 }
 type wire struct {
 	kind, id string

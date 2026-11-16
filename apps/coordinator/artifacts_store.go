@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -113,4 +114,35 @@ func (s *Server) completeArtifact(u artifactUpload) (protocol.ArtifactRef, error
 		return ref, e
 	}
 	return ref, tx.Commit()
+}
+
+// References include waiters, so entries can be removed without splitting a
+// live upload's serialization across two locks.
+type artifactLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func (s *Server) lockArtifact(key string) func() {
+	s.artifactMu.Lock()
+	if s.artifactLocks == nil {
+		s.artifactLocks = make(map[string]*artifactLock)
+	}
+	entry := s.artifactLocks[key]
+	if entry == nil {
+		entry = &artifactLock{}
+		s.artifactLocks[key] = entry
+	}
+	entry.refs++
+	s.artifactMu.Unlock()
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		s.artifactMu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(s.artifactLocks, key)
+		}
+		s.artifactMu.Unlock()
+	}
 }

@@ -44,19 +44,25 @@ func (s *Server) artifactsHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Serialize file+SQLite publication with scheduling and other artifact writes.
-	s.mu.Lock()
-	locked := true
-	defer func() {
-		if locked {
-			s.mu.Unlock()
+	// File I/O is serialized only with writes to the same upload. The scheduler
+	// and live cancellation never wait behind an artifact's hash or disk flush.
+	path := strings.TrimPrefix(r.URL.Path, "/v1/artifacts/")
+	key := ""
+	if path == "uploads" {
+		var in protocol.ArtifactUploadRequest
+		if protocol.Decode(body, &in) == nil {
+			key = "task:" + in.TaskID + "\x00" + in.Name
 		}
-	}()
+	} else if strings.HasPrefix(path, "uploads/") {
+		key = "upload:" + strings.Split(path, "/")[1]
+	}
+	if key != "" {
+		defer s.lockArtifact(key)()
+	}
 	deny := func() {
 		writeJSON(w, 403, protocol.Error{Code: "FORBIDDEN", Message: "artifact is not assigned or required"})
 	}
 	fail := func(e error) { writeError(w, e) }
-	path := strings.TrimPrefix(r.URL.Path, "/v1/artifacts/")
 	if path == "uploads" && r.Method == "POST" {
 		var in protocol.ArtifactUploadRequest
 		e := protocol.Decode(body, &in)
@@ -193,8 +199,6 @@ func (s *Server) artifactsHTTP(w http.ResponseWriter, r *http.Request) {
 		defer f.Close()
 		w.Header().Set("ETag", `"`+hash+`"`)
 		w.Header().Set("Content-Type", media)
-		s.mu.Unlock()
-		locked = false
 		http.ServeContent(w, r, path, time.Time{}, f)
 		return
 	}
