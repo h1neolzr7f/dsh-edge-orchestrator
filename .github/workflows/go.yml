@@ -1,4 +1,4 @@
-name: Go Phase 0-1
+name: Fleet V1 validation
 on:
   push:
   pull_request:
@@ -23,3 +23,21 @@ jobs:
       - run: go test -race ./tests ./apps/coordinator ./apps/edge-agent ./packages/edge-link
       - if: runner.os == 'Linux'
         run: bash scripts/build.sh
+  ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.2'
+          cache-dependency-path: '**/go.sum'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.50.0'
+          channel: stable
+          cache: true
+      - run: bash scripts/check-ui.sh
+        env:
+          CI: 'true'
+          FLUTTER_SUPPRESS_ANALYTICS: 'true'
