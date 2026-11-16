@@ -27,7 +27,14 @@ func TestCleanupTaskWorkspaceRemovesOwnedLockedRegistration(t *testing.T) {
 	}
 	git("add", ".")
 	git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial")
-	a := &Agent{cfg: Config{Workspaces: map[string]string{"workspace/project": root}}, dataDir: t.TempDir()}
+	// Use production initialization so both the authorized root and run directory
+	// receive Windows short-path canonicalization before confinement checks.
+	a, err := Open(Config{DBPath: filepath.Join(t.TempDir(), "agent.db"), DeviceID: "cleanup_worker", Token: "test-token", CoordinatorURL: "https://localhost", Workspaces: map[string]string{"workspace/project": root}, AllowedPrograms: []string{"git"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.Close() })
+	root = a.cfg.Workspaces["workspace/project"]
 	task := protocol.TaskEnvelope{TaskID: "locked_cleanup", WorkspaceContext: &protocol.WorkspaceContext{RootDir: "workspace/project", ExpectedGitHead: strings.TrimSpace(git("rev-parse", "HEAD"))}}
 	if _, err := a.prepareTask(ctx, task); err != nil {
 		t.Fatal(err)
