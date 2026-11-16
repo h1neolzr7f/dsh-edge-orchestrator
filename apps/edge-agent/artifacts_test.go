@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -211,32 +212,69 @@ func TestArtifactScratchUsesDeclaredAuthorizedWorkspace(t *testing.T) {
 }
 
 func TestArtifactNestedProcessMount(t *testing.T) {
-	data := []byte("nested")
-	h := sha256.Sum256(data)
-	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("ETag", `"`+hex.EncodeToString(h[:])+`"`)
-		w.Write(data)
-	}))
-	defer ts.Close()
-	a, e := Open(Config{DBPath: filepath.Join(t.TempDir(), "agent.db"), DeviceID: "w", Token: "secret", CoordinatorURL: ts.URL, HTTPClient: ts.Client()})
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer a.Close()
-	task := artifactTask("nested", hex.EncodeToString(h[:]))
-	task.Capability.ID = "process.exec"
-	task.Input = json.RawMessage(`{"program":"go","cwd":"workspace/project/sub/deep"}`)
-	ctx, e := a.prepareTask(context.Background(), task)
-	if e != nil {
-		t.Fatal(e)
-	}
-	dir, e := a.processDir(ctx, "workspace/project/sub/deep")
-	if e != nil {
-		t.Fatal(e)
-	}
-	b, e := os.ReadFile(filepath.Join(dir, "input"))
-	if e != nil || string(b) != "nested" {
-		t.Fatalf("nested cwd mount %q: %v", b, e)
+	for _, worktree := range []bool{false, true} {
+		t.Run(fmt.Sprint(worktree), func(t *testing.T) {
+			data := []byte("nested")
+			h := sha256.Sum256(data)
+			ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("ETag", `"`+hex.EncodeToString(h[:])+`"`)
+				w.Write(data)
+			}))
+			defer ts.Close()
+			root := t.TempDir()
+			git := func(args ...string) string {
+				cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+				b, e := cmd.CombinedOutput()
+				if e != nil {
+					t.Fatalf("git %v: %s %v", args, b, e)
+				}
+				return strings.TrimSpace(string(b))
+			}
+			head := ""
+			if worktree {
+				git("init", "-q")
+				os.MkdirAll(filepath.Join(root, "sub", "deep"), 0700)
+				os.WriteFile(filepath.Join(root, "sub", "deep", "tracked"), []byte("host"), 0600)
+				git("add", ".")
+				git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture")
+				head = git("rev-parse", "HEAD")
+			}
+			a, e := Open(Config{DBPath: filepath.Join(t.TempDir(), "agent.db"), DeviceID: "w", Token: "secret", CoordinatorURL: ts.URL, HTTPClient: ts.Client(), Workspaces: map[string]string{"workspace/project": root}})
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer a.Close()
+			task := artifactTask("nested", hex.EncodeToString(h[:]))
+			task.Capability.ID = "process.exec"
+			task.Input = json.RawMessage(`{"program":"git","args":["hash-object","input"],"cwd":"workspace/project/sub/deep"}`)
+			if worktree {
+				task.WorkspaceContext = &protocol.WorkspaceContext{RootDir: "workspace/project", ExpectedGitHead: head}
+			}
+			ctx, e := a.prepareTask(context.Background(), task)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer a.cleanupTaskWorkspace(task)
+			dir, e := a.processDir(ctx, "workspace/project/sub/deep")
+			if e != nil {
+				t.Fatal(e)
+			}
+			b, e := os.ReadFile(filepath.Join(dir, "input"))
+			if e != nil || string(b) != "nested" {
+				t.Fatalf("nested cwd mount %q: %v", b, e)
+			}
+			cmd := exec.Command("git", "hash-object", "input")
+			cmd.Dir = dir
+			if b, e = cmd.CombinedOutput(); e != nil {
+				t.Fatalf("real process cannot read cwd mount: %s %v", b, e)
+			}
+			if _, e = os.Stat(filepath.Join(root, "sub", "deep", "input")); !os.IsNotExist(e) {
+				t.Fatal("mounted into host checkout")
+			}
+			if _, e = os.Stat(filepath.Join(a.taskDir(task.TaskID), "workspace", "input")); !os.IsNotExist(e) {
+				t.Fatal("mounted into checkout root instead of execution cwd")
+			}
+		})
 	}
 }
 
@@ -269,6 +307,15 @@ func TestArtifactClaimBoundaryGuards(t *testing.T) {
 			}
 			if n, _ := a.ExecutionCount(task.TaskID); n != 0 {
 				t.Errorf("execution count=%d", n)
+			}
+			events, e := a.outbox(0)
+			if e != nil {
+				t.Fatal(e)
+			}
+			for _, event := range events {
+				if event.Type == "task.started" {
+					t.Fatal("preflight emitted task.started")
+				}
 			}
 			snap, e := a.taskSnapshot(task.TaskID)
 			want := "failed"

@@ -41,7 +41,7 @@ func TestMain(m *testing.M) {
 			fmt.Println("artifact-producer-once")
 		case "artifact-report":
 			b, err := os.ReadFile("README.md")
-			if err != nil || string(b) != "patched fixture\n" {
+			if err != nil || strings.ReplaceAll(string(b), "\r\n", "\n") != "patched fixture\n" {
 				os.Exit(9)
 			}
 			if err = os.WriteFile("junit.xml", []byte("<testsuite tests=\"1\"/>"), 0600); err != nil {

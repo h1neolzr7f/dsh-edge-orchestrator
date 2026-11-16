@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -157,6 +158,43 @@ func openReadRegular(path string) (*os.File, error) {
 	if !info.Mode().IsRegular() {
 		f.Close()
 		return nil, protocol.Err("FILE_NOT_REGULAR", "only regular files can be read")
+	}
+	return f, nil
+}
+
+// Walk from an already opened directory without following mutable symlinks.
+// The final nonblocking open rejects FIFOs before any read can block.
+func openConfinedRegular(root, path string) (*os.File, error) {
+	rel, e := filepath.Rel(root, path)
+	if e != nil || rel == ".." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
+		return nil, protocol.Err("PATH_OUTSIDE_WORKSPACE", "artifact path escaped workspace")
+	}
+	fd, e := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if e != nil {
+		return nil, e
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	for i, part := range parts {
+		flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC
+		if i < len(parts)-1 {
+			flags |= unix.O_DIRECTORY
+		}
+		next, err := unix.Openat(fd, part, flags, 0)
+		unix.Close(fd)
+		if err != nil {
+			return nil, err
+		}
+		fd = next
+	}
+	f := os.NewFile(uintptr(fd), path)
+	st, e := f.Stat()
+	if e != nil {
+		f.Close()
+		return nil, e
+	}
+	if !st.Mode().IsRegular() {
+		f.Close()
+		return nil, protocol.Err("FILE_NOT_REGULAR", "artifact must be a regular file")
 	}
 	return f, nil
 }

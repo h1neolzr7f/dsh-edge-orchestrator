@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/artifact"
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol"
+	"os"
 )
 
 func (c *Client) artifactClient() *artifact.Client { return artifact.NewClient(c.URL, c.Token, c.HTTP) }
@@ -21,4 +22,10 @@ func (c *Client) UploadArtifactFile(ctx context.Context, in protocol.ArtifactUpl
 }
 func (c *Client) DownloadArtifactFile(ctx context.Context, id, path, sha string) error {
 	return c.artifactClient().DownloadFile(ctx, id, path, sha)
+}
+
+// UploadArtifactOpenFile transfers an already confined regular file descriptor.
+// The caller retains ownership of f.
+func (c *Client) UploadArtifactOpenFile(ctx context.Context, in protocol.ArtifactUploadRequest, f *os.File) (protocol.ArtifactRef, error) {
+	return c.artifactClient().UploadOpenFile(ctx, in, f)
 }

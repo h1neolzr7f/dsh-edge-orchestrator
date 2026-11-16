@@ -7,6 +7,8 @@ import (
 	"golang.org/x/sys/windows"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -218,6 +220,35 @@ func openReadRegular(path string) (*os.File, error) {
 			return nil, e
 		}
 		return nil, protocol.Err("FILE_NOT_REGULAR", "only regular files can be read")
+	}
+	return f, nil
+}
+
+// Validate the opened handle's final path, so replacement of a checked path or
+// junction cannot redirect an upload outside its authorized workspace.
+func openConfinedRegular(root, path string) (*os.File, error) {
+	f, e := openReadRegular(path)
+	if e != nil {
+		return nil, e
+	}
+	buf := make([]uint16, 32768)
+	n, e := windows.GetFinalPathNameByHandle(windows.Handle(f.Fd()), &buf[0], uint32(len(buf)), 0)
+	if e != nil || n >= uint32(len(buf)) {
+		f.Close()
+		if e != nil {
+			return nil, e
+		}
+		return nil, fmt.Errorf("artifact final path too long")
+	}
+	final := windows.UTF16ToString(buf[:n])
+	final = strings.TrimPrefix(final, `\\?\`)
+	if strings.HasPrefix(final, `UNC\`) {
+		final = `\\` + strings.TrimPrefix(final, `UNC\`)
+	}
+	rel, e := filepath.Rel(root, final)
+	if e != nil || rel == ".." || strings.HasPrefix(rel, `..\`) || filepath.IsAbs(rel) {
+		f.Close()
+		return nil, protocol.Err("PATH_OUTSIDE_WORKSPACE", "opened artifact escaped workspace")
 	}
 	return f, nil
 }

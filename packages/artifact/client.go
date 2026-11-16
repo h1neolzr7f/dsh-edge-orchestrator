@@ -21,6 +21,8 @@ import (
 
 const ChunkSize = 4 << 20
 
+var errHTTPSRequired = errors.New("HTTPS coordinator required")
+
 type Client struct {
 	URL, Token string
 	HTTP       *http.Client
@@ -35,7 +37,7 @@ func NewClient(endpoint, token string, h *http.Client) *Client {
 func (c *Client) request(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
 	u, e := url.Parse(c.URL)
 	if e != nil || u.Scheme != "https" || u.Host == "" {
-		return nil, fmt.Errorf("HTTPS coordinator required")
+		return nil, errHTTPSRequired
 	}
 	r, e := http.NewRequestWithContext(ctx, method, c.URL+path, body)
 	if e != nil {
@@ -97,18 +99,29 @@ func retry(ctx context.Context) error {
 }
 func permanent(e error) bool {
 	var pe *protocol.Error
-	return errors.As(e, &pe) && pe.Code != "OFFSET_MISMATCH" && pe.Code != "INTERNAL_ERROR" && pe.Code != "STORE_ERROR"
+	return errors.Is(e, errHTTPSRequired) || errors.As(e, &pe) && pe.Code != "OFFSET_MISMATCH" && pe.Code != "INTERNAL_ERROR" && pe.Code != "STORE_ERROR"
 }
 
 // UploadFile hashes a regular file and resumes from the server-confirmed offset.
 // Transport failures retry until ctx expires; semantic errors return immediately.
 func (c *Client) UploadFile(ctx context.Context, in protocol.ArtifactUploadRequest, path string) (protocol.ArtifactRef, error) {
 	var out protocol.ArtifactRef
-	f, e := os.Open(path)
+	f, e := openRegular(path)
 	if e != nil {
 		return out, e
 	}
 	defer f.Close()
+	return c.UploadOpenFile(ctx, in, f)
+}
+
+// UploadOpenFile uploads the caller's already checked descriptor without opening
+// its pathname again. The caller retains ownership and must close the file.
+// The descriptor must be seekable and regular; hashing starts at offset zero.
+func (c *Client) UploadOpenFile(ctx context.Context, in protocol.ArtifactUploadRequest, f *os.File) (protocol.ArtifactRef, error) {
+	var out protocol.ArtifactRef
+	if _, e := f.Seek(0, io.SeekStart); e != nil {
+		return out, e
+	}
 	st, e := f.Stat()
 	if e != nil {
 		return out, e
@@ -192,9 +205,9 @@ func (c *Client) DownloadFile(ctx context.Context, id, path, expectedSHA string)
 		}
 		have := st.Size()
 		u, e := url.Parse(c.URL)
-		if e != nil || u.Scheme != "https" {
+		if e != nil || u.Scheme != "https" || u.Host == "" {
 			f.Close()
-			return fmt.Errorf("HTTPS coordinator required")
+			return errHTTPSRequired
 		}
 		r, e := http.NewRequestWithContext(ctx, "GET", c.URL+"/v1/artifacts/"+url.PathEscape(id), nil)
 		if e != nil {

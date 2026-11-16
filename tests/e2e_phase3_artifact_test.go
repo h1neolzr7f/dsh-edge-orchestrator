@@ -385,3 +385,25 @@ func TestArtifactInvalidPatchFailsPreflightWithoutHostMutation(t *testing.T) {
 		t.Fatal("preflight executed command")
 	}
 }
+
+func TestArtifactReportFixtureAcceptsNativeCRLF(t *testing.T) {
+	exe, e := os.Executable()
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, text := range []string{"patched fixture\n", "patched fixture\r\n", "wrong fixture\r\n"} {
+		dir := t.TempDir()
+		if e = os.WriteFile(filepath.Join(dir, "README.md"), []byte(text), 0600); e != nil {
+			t.Fatal(e)
+		}
+		cmd := exec.Command(exe, "--phase2-workload", "artifact-report")
+		cmd.Dir = dir
+		e = cmd.Run()
+		if strings.HasPrefix(text, "patched") && e != nil {
+			t.Fatalf("fixture text %q: %v", text, e)
+		}
+		if strings.HasPrefix(text, "wrong") && e == nil {
+			t.Fatal("incorrect text accepted")
+		}
+	}
+}

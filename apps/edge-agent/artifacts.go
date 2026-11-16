@@ -75,7 +75,11 @@ func (a *Agent) uploadOutputs(ctx context.Context, t protocol.TaskEnvelope) erro
 		if !protocol.SafePath(out.Path) || out.Name == "" || out.MediaType == "" {
 			return protocol.Err("ARTIFACT_UPLOAD_FAILED", "invalid output declaration")
 		}
-		root, e := a.taskRoot(ctx, "")
+		base, e := a.taskRoot(ctx, "")
+		if e != nil {
+			return protocol.Err("ARTIFACT_UPLOAD_FAILED", e.Error())
+		}
+		root := base
 		if t.Capability.ID == "process.exec" {
 			var in struct {
 				CWD string `json:"cwd"`
@@ -92,12 +96,12 @@ func (a *Agent) uploadOutputs(ctx context.Context, t protocol.TaskEnvelope) erro
 		if e != nil {
 			return protocol.Err("ARTIFACT_UPLOAD_FAILED", e.Error())
 		}
-		f, e := openReadRegular(path)
+		f, e := openConfinedRegular(base, path)
 		if e != nil {
 			return protocol.Err("ARTIFACT_UPLOAD_FAILED", e.Error())
 		}
+		_, e = a.artifactClient().UploadArtifactOpenFile(ctx, protocol.ArtifactUploadRequest{PlanID: t.PlanID, TaskID: t.TaskID, Name: out.Name, MediaType: out.MediaType}, f)
 		f.Close()
-		_, e = a.artifactClient().UploadArtifactFile(ctx, protocol.ArtifactUploadRequest{PlanID: t.PlanID, TaskID: t.TaskID, Name: out.Name, MediaType: out.MediaType}, path)
 		if e != nil {
 			if a.ctx.Err() != nil {
 				return errAgentDetached
@@ -124,7 +128,16 @@ func (a *Agent) executeArtifactUpload(ctx context.Context, t protocol.TaskEnvelo
 	if e != nil {
 		return nil, e
 	}
-	ref, e := a.artifactClient().UploadArtifactFile(ctx, protocol.ArtifactUploadRequest{PlanID: t.PlanID, TaskID: t.TaskID, Name: in.Name, MediaType: in.Media}, path)
+	root, e := a.taskRoot(ctx, in.Workspace)
+	if e != nil {
+		return nil, e
+	}
+	f, e := openConfinedRegular(root, path)
+	if e != nil {
+		return nil, protocol.Err("ARTIFACT_UPLOAD_FAILED", e.Error())
+	}
+	defer f.Close()
+	ref, e := a.artifactClient().UploadArtifactOpenFile(ctx, protocol.ArtifactUploadRequest{PlanID: t.PlanID, TaskID: t.TaskID, Name: in.Name, MediaType: in.Media}, f)
 	if e != nil {
 		return nil, protocol.Err("ARTIFACT_UPLOAD_FAILED", e.Error())
 	}
