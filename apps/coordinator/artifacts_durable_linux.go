@@ -15,7 +15,7 @@ func syncArtifactDir(path string) error {
 	return f.Sync()
 }
 
-// Persist new ancestor names as well as the artifact directory itself.
+// Publish the owned artifact directory name in the pre-established DB directory.
 func durableArtifactDir(path string) error { return durableArtifactDirWithSync(path, syncArtifactDir) }
 func durableArtifactDirWithSync(path string, syncDir func(string) error) error {
 	exists := false
@@ -28,14 +28,11 @@ func durableArtifactDirWithSync(path string, syncDir func(string) error) error {
 		return e
 	}
 	parent := filepath.Dir(path)
-	if parent == path {
-		return nil
-	} // Filesystem root has no parent name to publish.
-	// Existing names may come from a concurrent mkdir or a prior failed fsync.
-	// Re-establish every ancestor barrier instead of treating visibility as durability.
-	if e := durableArtifactDirWithSync(parent, syncDir); e != nil {
-		return e
-	}
+	// The DB directory already exists before artifact storage is used. Only
+	// this owned child name needs a publication barrier: unrelated ancestors
+	// may permit traversal without granting read/list access for fsync.
+	// Repeat the immediate-parent barrier even for an existing name, which may
+	// be visible from a concurrent mkdir or a previous failed parent fsync.
 	if !exists {
 		if e := os.Mkdir(path, 0700); e != nil && !errors.Is(e, os.ErrExist) {
 			return e
