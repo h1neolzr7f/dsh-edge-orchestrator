@@ -51,14 +51,16 @@ func (a *Agent) cleanupTaskWorkspace(t protocol.TaskEnvelope) error {
 	// Git requires force twice to remove a locked worktree deliberately.
 	_, removeErr := gitOutput(ctx, root, "worktree", "remove", "--force", "--force", workspace)
 	// A partial checkout or a previously removed registration still needs disk
-	// removal followed by pruning. Preserve the run directory and its diagnostics.
+	// removal. Preserve the run directory and its diagnostics.
 	diskErr := os.RemoveAll(workspace)
-	_, pruneErr := gitOutput(ctx, root, "worktree", "prune")
-	// Pruning can succeed while retaining a locked registration. Only treat
+	// Never globally prune a shared repository here: Git prunes even a fresh
+	// administrative directory while another Worker is still running add.
+	// The targeted remove owns deregistration; verify only our checkout below.
+	// Only treat
 	// removal errors as an idempotent success after verifying its absence.
 	listed, listErr := gitOutput(ctx, root, "worktree", "list", "--porcelain", "-z")
-	if diskErr != nil || pruneErr != nil || listErr != nil {
-		return errors.Join(removeErr, diskErr, pruneErr, listErr)
+	if diskErr != nil || listErr != nil {
+		return errors.Join(removeErr, diskErr, listErr)
 	}
 	if len(listed) >= 256<<10 {
 		return errors.Join(removeErr, fmt.Errorf("workspace cleanup: worktree listing exceeds verification limit"))

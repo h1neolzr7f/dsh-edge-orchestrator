@@ -279,6 +279,42 @@ func (a *Agent) recoverTasks() ([]protocol.TaskEnvelope, error) {
 			return nil, e
 		}
 	}
+	// Retain terminal rows as the durable cleanup queue. Missing checkouts are
+	// skipped; a transient removal error leaves the row available next restart.
+	a.mu.Lock()
+	cleanupRows, err := a.db.Query(`SELECT payload FROM local_task_ledger WHERE status IN ('succeeded','failed','cancelled','rejected')`)
+	if err != nil {
+		a.mu.Unlock()
+		return nil, err
+	}
+	var cleanup []protocol.TaskEnvelope
+	for cleanupRows.Next() {
+		var raw string
+		if err = cleanupRows.Scan(&raw); err != nil {
+			break
+		}
+		var t protocol.TaskEnvelope
+		if err = json.Unmarshal([]byte(raw), &t); err != nil {
+			break
+		}
+		cleanup = append(cleanup, t)
+	}
+	if err == nil {
+		err = cleanupRows.Err()
+	}
+	cleanupRows.Close()
+	a.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range cleanup {
+		if _, err = os.Stat(filepath.Join(a.taskDir(t.TaskID), "workspace")); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err = a.cleanupTaskWorkspace(t); err != nil {
+			a.setError(err)
+		}
+	}
 	return accepted, nil
 }
 

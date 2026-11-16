@@ -13,7 +13,7 @@ import (
 
 const authoritySchema = `
 CREATE TABLE IF NOT EXISTS approvals(id TEXT PRIMARY KEY,plan_id TEXT NOT NULL,task_id TEXT UNIQUE NOT NULL,device_id TEXT,scope TEXT NOT NULL,reason TEXT NOT NULL,status TEXT NOT NULL,decision_reason TEXT,created_at TEXT NOT NULL,resolved_at TEXT);
-CREATE TABLE IF NOT EXISTS pairings(code TEXT PRIMARY KEY,device_hint TEXT,expires_at INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS pairings(code TEXT PRIMARY KEY,device_hint TEXT,expires_at INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0,recover_existing INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS device_credentials(device_id TEXT PRIMARY KEY,token_hash TEXT NOT NULL,created_at TEXT NOT NULL);`
 
 func scanApproval(row interface{ Scan(...any) error }) (protocol.Approval, error) {
@@ -206,4 +206,32 @@ func (s *Server) authorityHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, out)
+}
+
+func ensureAuthorityColumns(db *sql.DB) error {
+	rows, e := db.Query(`PRAGMA table_info(pairings)`)
+	if e != nil {
+		return e
+	}
+	found := false
+	for rows.Next() {
+		var cid, nn, pk int
+		var name, typ string
+		var def any
+		if e = rows.Scan(&cid, &name, &typ, &nn, &def, &pk); e != nil {
+			break
+		}
+		found = found || name == "recover_existing"
+	}
+	if e == nil {
+		e = rows.Err()
+	}
+	rows.Close()
+	if e != nil {
+		return e
+	}
+	if !found {
+		_, e = db.Exec(`ALTER TABLE pairings ADD COLUMN recover_existing INTEGER NOT NULL DEFAULT 0`)
+	}
+	return e
 }

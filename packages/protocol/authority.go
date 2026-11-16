@@ -20,8 +20,9 @@ type ApprovalDecision struct {
 	Reason   string `json:"reason,omitempty"`
 }
 type PairingRequest struct {
-	DeviceHint     string `json:"device_hint,omitempty"`
-	CoordinatorURL string `json:"coordinator_url"`
+	RecoverExisting bool   `json:"recover_existing,omitempty"`
+	DeviceHint      string `json:"device_hint,omitempty"`
+	CoordinatorURL  string `json:"coordinator_url"`
 }
 type Pairing struct {
 	PairingCode    string    `json:"pairing_code"`

@@ -76,6 +76,28 @@ class Source implements FleetSource {
 
 void main() {
   test(
+      'cold and expired baselines retain authoritative completed output summaries',
+      () async {
+    final api = Source();
+    final snapshot = plan('a', 10, 'succeeded');
+    snapshot['tasks'][0]['result'] = {
+      'stdout_summary': 'before barrier\n',
+      'stderr_summary': 'warning\n'
+    };
+    api.fleet['plans'] = [snapshot];
+    final store = FleetProjectionStore(api);
+    await store.sync();
+    expect(store.worker('a', 'a_task').logTail, contains('before barrier'));
+    api.expired = true;
+    api.fleet['snapshot_coord_seq'] = 50;
+    snapshot['snapshot_coord_seq'] = 50;
+    snapshot['tasks'][0]['result']['stdout_summary'] = 'new baseline output\n';
+    await store.sync();
+    expect(
+        store.worker('a', 'a_task').logTail, contains('new baseline output'));
+  });
+
+  test(
       'single-card barrier preserves unrelated events; fixed pages sorted/deduplicated and reload',
       () async {
     final api = Source();

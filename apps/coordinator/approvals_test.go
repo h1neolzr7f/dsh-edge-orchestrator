@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"fmt"
 	edgelink "github.com/h1neolzr7f/dsh-edge-orchestrator/packages/edge-link"
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol"
 	"net/http/httptest"
@@ -220,5 +221,79 @@ func TestDeniedApprovalRejectsDependent(t *testing.T) {
 	}
 	if codes["t"] != "APPROVAL_DENIED" || codes["dependent"] != "DEPENDENCY_FAILED" || snap.Status != "failed" {
 		t.Fatalf("%+v", snap)
+	}
+}
+
+func TestControllerRecoversLostFirstEnrollmentForSameDevice(t *testing.T) {
+	s := setup(t)
+	first, e := s.CreatePairing(protocol.PairingRequest{DeviceHint: "lost", CoordinatorURL: "https://localhost"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	lost, e := s.ClaimPairing(protocol.PairingClaim{PairingCode: first.PairingCode, DeviceID: "lost"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	// The original successful response was lost before any Worker saved it.
+	recovery, e := s.CreatePairing(protocol.PairingRequest{DeviceHint: "lost", CoordinatorURL: "https://localhost", RecoverExisting: true})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.ClaimPairing(protocol.PairingClaim{PairingCode: recovery.PairingCode, DeviceID: "intruder"}); e == nil {
+		t.Fatal("recovery must remain ID-bound")
+	}
+	out, e := s.ClaimPairing(protocol.PairingClaim{PairingCode: recovery.PairingCode, DeviceID: "lost"})
+	if e != nil {
+		t.Fatal("lost enrollment stranded", e)
+	}
+	if out.WorkerToken == lost.WorkerToken || s.workerDevice(lost.WorkerToken) != "" || s.workerDevice(out.WorkerToken) != "lost" {
+		t.Fatal("recovery grant failed")
+	}
+	if _, e = s.ClaimPairing(protocol.PairingClaim{PairingCode: recovery.PairingCode, DeviceID: "lost"}); e == nil {
+		t.Fatal("independent redeemer reused recovery")
+	}
+	if _, e = s.CreatePairing(protocol.PairingRequest{CoordinatorURL: "https://localhost", RecoverExisting: true}); e == nil {
+		t.Fatal("unbound credential recovery")
+	}
+}
+
+func TestEnrollmentRecoveryNeverResetsKnownWorkerHistory(t *testing.T) {
+	for _, race := range []bool{false, true} {
+		t.Run(fmt.Sprint(race), func(t *testing.T) {
+			s := setup(t)
+			first, e := s.CreatePairing(protocol.PairingRequest{DeviceHint: "enrolled", CoordinatorURL: "https://localhost"})
+			if e != nil {
+				t.Fatal(e)
+			}
+			credential, e := s.ClaimPairing(protocol.PairingClaim{DeviceID: "enrolled", PairingCode: first.PairingCode})
+			if e != nil {
+				t.Fatal(e)
+			}
+			var recovery protocol.Pairing
+			if race {
+				recovery, e = s.CreatePairing(protocol.PairingRequest{DeviceHint: "enrolled", CoordinatorURL: "https://localhost", RecoverExisting: true})
+				if e != nil {
+					t.Fatal(e)
+				}
+			}
+			s.mu.Lock()
+			_, e = s.db.Exec(`INSERT INTO devices(id,registration,last_worker_seq) VALUES('enrolled','{}',3)`)
+			s.mu.Unlock()
+			if e != nil {
+				t.Fatal(e)
+			}
+			if !race {
+				if _, e = s.CreatePairing(protocol.PairingRequest{DeviceHint: "enrolled", CoordinatorURL: "https://localhost", RecoverExisting: true}); e == nil {
+					t.Fatal("history-bearing identity recovery offered")
+				}
+			} else {
+				if _, e = s.ClaimPairing(protocol.PairingClaim{DeviceID: "enrolled", PairingCode: recovery.PairingCode}); e == nil {
+					t.Fatal("registration race replaced active history identity")
+				}
+			}
+			if s.workerDevice(credential.WorkerToken) != "enrolled" {
+				t.Fatal("old history token revoked")
+			}
+		})
 	}
 }

@@ -44,7 +44,7 @@ func (c *Client) request(ctx context.Context, method, path string, body io.Reade
 		return nil, e
 	}
 	r.Header.Set("Authorization", "Bearer "+c.Token)
-	return c.HTTP.Do(r)
+	return CredentialHTTP(c.HTTP).Do(r)
 }
 func responseJSON(res *http.Response, out any) error {
 	defer res.Body.Close()
@@ -190,6 +190,7 @@ func (c *Client) UploadOpenFile(ctx context.Context, in protocol.ArtifactUploadR
 // DownloadFile preserves partial bytes at path across interruption/restart and
 // validates the final SHA-256. Empty expectedSHA uses the ready artifact ETag.
 func (c *Client) DownloadFile(ctx context.Context, id, path, expectedSHA string) error {
+	forceFull := false
 	for {
 		if e := ctx.Err(); e != nil {
 			return e
@@ -215,12 +216,15 @@ func (c *Client) DownloadFile(ctx context.Context, id, path, expectedSHA string)
 			return e
 		}
 		r.Header.Set("Authorization", "Bearer "+c.Token)
-		if have > 0 {
+		if have > 0 && !forceFull {
 			r.Header.Set("Range", "bytes="+strconv.FormatInt(have, 10)+"-")
 		}
-		res, e := c.HTTP.Do(r)
+		res, e := CredentialHTTP(c.HTTP).Do(r)
 		if e != nil {
 			f.Close()
+			if permanent(e) {
+				return e
+			}
 			if e = retry(ctx); e != nil {
 				return e
 			}
@@ -238,6 +242,14 @@ func (c *Client) DownloadFile(ctx context.Context, id, path, expectedSHA string)
 			f.Close()
 			return responseJSON(res, &struct{}{})
 		}
+		if res.StatusCode == 416 && expectedSHA == "" && !forceFull {
+			// Go ServeContent may strip ETag on 416. Re-fetch successfully from zero
+			// to obtain an authenticated digest; never trust the local bytes alone.
+			res.Body.Close()
+			f.Close()
+			forceFull = true
+			continue
+		}
 		hash := strings.Trim(res.Header.Get("ETag"), `"`)
 		if expectedSHA != "" {
 			hash = expectedSHA
@@ -248,6 +260,7 @@ func (c *Client) DownloadFile(ctx context.Context, id, path, expectedSHA string)
 			f.Close()
 			return protocol.Err("ARTIFACT_HASH_MISMATCH", "missing or invalid artifact digest")
 		}
+		forceFull = false
 		if res.StatusCode == 416 && have > 0 {
 			res.Body.Close()
 			e = verify(f, hash)

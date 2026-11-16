@@ -1,5 +1,5 @@
 import { FleetClient } from "./client.mjs";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import path from "node:path";
 import { mkdir, realpath, lstat, open } from "node:fs/promises";
 import { constants } from "node:fs";
@@ -16,8 +16,11 @@ const safePath = (s) =>
   s.split("/").every((x) => x && x !== "." && x !== "..");
 export function validatePlan(input) {
   const p = {
-    plan_id: "plan_" + randomUUID(),
-    idempotency_key: randomUUID(),
+    plan_id: input.idempotency_key
+      ? "plan_" +
+        createHash("sha256").update(input.idempotency_key).digest("hex")
+      : "plan_" + randomUUID(),
+    idempotency_key: input.plan_id ? "fleet:" + input.plan_id : randomUUID(),
     concurrency_limit: 2,
     created_at: new Date().toISOString(),
     ...input,
@@ -202,8 +205,28 @@ export function createTools(config) {
   const client = config.client ?? new FleetClient(config);
   const options = (exec) => ({ signal: exec?.signal });
   const submit = async (p, exec) => {
+    const explicitTime = p.created_at != null;
     p = validatePlan(p);
-    const accepted = await client.submit(p, options(exec));
+    // Reuse the authoritative creation time on retries, keeping all semantic
+    // arguments under the Coordinator's existing full-envelope fingerprint.
+    const recoverTime = async () => {
+      const old = await client.plan(p.plan_id, options(exec));
+      if (!explicitTime && old.plan.idempotency_key === p.idempotency_key)
+        p.created_at = old.plan.created_at;
+    };
+    try {
+      await recoverTime();
+    } catch (e) {
+      if (e.code !== "PLAN_NOT_FOUND" && e.status !== 404) throw e;
+    }
+    let accepted;
+    try {
+      accepted = await client.submit(p, options(exec));
+    } catch (e) {
+      if (e.code !== "IDEMPOTENCY_CONFLICT") throw e;
+      await recoverTime();
+      accepted = await client.submit(p, options(exec));
+    }
     return {
       ...accepted,
       projection: await client.plan(p.plan_id, options(exec)),
@@ -252,7 +275,16 @@ export function createTools(config) {
     "fleet.dispatch_task": async (a, e) => {
       if (a.task.depends_on?.length) throw Error("independent task required");
       const r = await submit(
-        { goal: a.goal ?? "Independent task", tasks: [a.task] },
+        {
+          goal: a.goal ?? "Independent task",
+          tasks: [a.task],
+          plan_id:
+            a.task.plan_id ||
+            "dispatch_" +
+              createHash("sha256").update(a.task.task_id).digest("hex"),
+          idempotency_key:
+            a.task.idempotency_key || "dispatch:" + a.task.task_id,
+        },
         e,
       );
       return a.wait

@@ -76,11 +76,19 @@ func (s *Server) artifactsHTTP(w http.ResponseWriter, r *http.Request) {
 				fail(protocol.Err("IDEMPOTENCY_CONFLICT", "artifact content changed"))
 				return
 			}
+			if !controller && !u.Completed && !s.workerMayTransfer(device, in.PlanID, in.TaskID) {
+				deny()
+				return
+			}
 			writeJSON(w, 200, protocol.ArtifactUploadSession{UploadID: u.UploadID, ArtifactID: u.ArtifactID, ChunkSize: u.ChunkSize, ConfirmedOffset: u.Offset})
 			return
 		}
 		if !errors.Is(e, sql.ErrNoRows) {
 			fail(e)
+			return
+		}
+		if !controller && !s.workerMayTransfer(device, in.PlanID, in.TaskID) {
+			deny()
 			return
 		}
 		u = artifactUpload{UploadID: protocol.NewID("up"), ArtifactID: protocol.NewID("art"), ChunkSize: 4 << 20, Plan: in.PlanID, Task: in.TaskID, Device: device, Name: in.Name, Media: in.MediaType, Hash: in.SHA256, Size: in.SizeBytes}
@@ -130,6 +138,10 @@ func (s *Server) artifactsHTTP(w http.ResponseWriter, r *http.Request) {
 			deny()
 			return
 		}
+		if !controller && !s.workerMayTransfer(device, u.Plan, u.Task) && !(u.Completed && len(parts) == 3 && parts[2] == "complete" && r.Method == "POST") {
+			deny()
+			return
+		}
 		if len(parts) == 2 && r.Method == "PATCH" {
 			offset, e := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
 			if e != nil || offset != u.Offset {
@@ -172,7 +184,7 @@ func (s *Server) artifactsHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(parts) == 3 && parts[2] == "complete" && r.Method == "POST" {
-			ref, e := s.completeArtifact(u)
+			ref, e := s.completeArtifact(u, device)
 			if e != nil {
 				fail(e)
 				return

@@ -662,6 +662,9 @@
         },
         "device_hint": {
           "type": "string"
+        },
+        "recover_existing": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -1071,6 +1074,9 @@
         },
         "error": {
           "$ref": "#/$defs/Error"
+        },
+        "log_tail": {
+          "type": "string"
         },
         "pending_reason": {
           "enum": [

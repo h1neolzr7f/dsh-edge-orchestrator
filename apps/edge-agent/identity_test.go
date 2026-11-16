@@ -3,6 +3,8 @@ package agent
 import (
 	coordinator "github.com/h1neolzr7f/dsh-edge-orchestrator/apps/coordinator"
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -52,5 +54,66 @@ func TestPairedIdentitySecureReload(t *testing.T) {
 	}
 	if _, e = s.ClaimPairing(protocol.PairingClaim{PairingCode: pair.PairingCode, DeviceID: "w"}); e == nil {
 		t.Fatal("reused code")
+	}
+}
+
+type lossTransport struct {
+	base http.RoundTripper
+	drop bool
+}
+
+func (x *lossTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	res, e := x.base.RoundTrip(r)
+	if e == nil && x.drop && r.URL.Path == "/v1/pairings/claim" {
+		x.drop = false
+		io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+		return nil, io.ErrUnexpectedEOF
+	}
+	return res, e
+}
+func TestLostEnrollmentResponseRecoversSameAgentIdentity(t *testing.T) {
+	s, e := coordinator.Open(coordinator.Config{DBPath: filepath.Join(t.TempDir(), "c.db"), ControllerToken: "controller"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	ts := httptest.NewTLSServer(s.Handler())
+	defer ts.Close()
+	pair, e := s.CreatePairing(protocol.PairingRequest{DeviceHint: "lost-worker", CoordinatorURL: ts.URL})
+	if e != nil {
+		t.Fatal(e)
+	}
+	lossy := *ts.Client()
+	lossy.Transport = &lossTransport{base: ts.Client().Transport, drop: true}
+	cfg := Config{DBPath: filepath.Join(t.TempDir(), "a.db"), DeviceID: "lost-worker", PairingCode: pair.PairingCode, CoordinatorURL: ts.URL, HTTPClient: &lossy}
+	if a, e := Open(cfg); e == nil {
+		a.Close()
+		t.Fatal("response loss not injected")
+	}
+	recovery, e := s.CreatePairing(protocol.PairingRequest{DeviceHint: "lost-worker", CoordinatorURL: ts.URL, RecoverExisting: true})
+	if e != nil {
+		t.Fatal(e)
+	}
+	cfg.PairingCode = recovery.PairingCode
+	cfg.HTTPClient = ts.Client()
+	a, e := Open(cfg)
+	if e != nil {
+		t.Fatal(e)
+	}
+	token := a.cfg.Token
+	a.Close()
+	cfg.PairingCode = ""
+	cfg.DeviceID = ""
+	a, e = Open(cfg)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer a.Close()
+	if a.cfg.DeviceID != "lost-worker" || a.cfg.Token != token {
+		t.Fatal("recovered identity did not persist")
+	}
+	if _, e = s.ClaimPairing(protocol.PairingClaim{PairingCode: recovery.PairingCode, DeviceID: "lost-worker"}); e == nil {
+		t.Fatal("independent claimant reused code")
 	}
 }

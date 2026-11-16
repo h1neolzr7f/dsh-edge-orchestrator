@@ -8,7 +8,7 @@
 2. Edge Agent 使用 `--pair CODE --id DEVICE_ID` 经 HTTPS 原子兑换；同一码仅可成功一次。
 3. Coordinator 生成高熵随机 bearer worker_token，仅持久化 SHA-256 token_hash，不保存明文设备令牌。
 4. Edge Agent 在本地 SQLite identity 中保存设备 ID、Coordinator endpoint 与令牌；POSIX 数据库及 WAL/SHM 为 0600；Windows 使用专属用户目录并由部署者限制该目录 ACL（chmod 在 Windows 上不提供 POSIX 的用户隔离）。后续启动自动加载，拒绝跨 endpoint 使用保存凭据。
-5. 静态 DSH_WORKER_TOKENS/DSH_WORKER_TOKEN 继续兼容；Coordinator 支持空静态映射的纯配对部署。V1 不包含令牌轮换、撤销 API 或设备密钥对生命周期。
+5. 静态 DSH_WORKER_TOKENS/DSH_WORKER_TOKEN 继续兼容；Coordinator 支持空静态映射的纯配对部署。首次兑换响应丢失且设备尚未登记时，Controller 可用 recover_existing:true + device_hint 签发一次性恢复码（CLI pair-recover）。已经登记的设备禁止替换，以保留 worker_seq 历史；V1 无通用轮换/撤销 API 或设备密钥对生命周期。
 
 V1 不复用 Remote Runtime 的身份生命周期；采用成熟 TLS/密码库，不自行设计密码算法。
 

@@ -231,6 +231,48 @@ test(
       pollMs: 25,
     });
     assert.equal(done.status, "succeeded", JSON.stringify(done) + logs);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const replay = await invoke("fleet.plan_tasks", {
+      plan_id: "node_plan",
+      idempotency_key: "node_key",
+      goal: "tests and git",
+      tasks: [producer, inspect],
+    });
+    assert.equal(replay.plan_id, "node_plan");
+    const realSubmit = client.submit.bind(client);
+    let dropSubmit = true;
+    client.submit = async (p, ...rest) => {
+      const accepted = await realSubmit(p, ...rest);
+      if (dropSubmit && p.plan_id === "lost_plan") {
+        dropSubmit = false;
+        throw Error("simulated lost response");
+      }
+      return accepted;
+    };
+    const retryArgs = {
+      plan_id: "lost_plan",
+      idempotency_key: "lost_key",
+      goal: "lost response probe",
+      tasks: [{ ...inspect, task_id: "lost_task" }],
+    };
+    await assert.rejects(
+      invoke("fleet.plan_tasks", retryArgs),
+      /simulated lost response/,
+    );
+    assert.equal(
+      (await invoke("fleet.plan_tasks", retryArgs)).plan_id,
+      "lost_plan",
+    );
+    client.submit = realSubmit;
+    await assert.rejects(
+      invoke("fleet.plan_tasks", {
+        plan_id: "node_plan",
+        idempotency_key: "node_key",
+        goal: "changed meaning",
+        tasks: [producer, inspect],
+      }),
+      /IDEMPOTENCY_CONFLICT/,
+    );
     const result = await invoke("fleet.get_task", {
       plan_id: "node_plan",
       task_id: "test",
@@ -275,6 +317,11 @@ test(
         .status,
       "succeeded",
     );
+    const replaySingle = await invoke("fleet.dispatch_task", {
+      task: single,
+      wait: true,
+    });
+    assert.equal(replaySingle.status, "succeeded");
     const slow = task("slow", "process.exec", {
       program: process.execPath,
       args: ["-e", "setTimeout(()=>{},30000)"],

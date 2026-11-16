@@ -9,6 +9,7 @@ import (
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol"
 	_ "modernc.org/sqlite"
 	"time"
+	"unicode/utf8"
 )
 
 const schema = `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;
@@ -17,7 +18,8 @@ CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY,ikey TEXT UNIQUE NOT NULL,h
 CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,plan_id TEXT NOT NULL REFERENCES plans(id),ikey TEXT UNIQUE NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,task_seq INTEGER NOT NULL DEFAULT 0,result TEXT,error TEXT,last_dispatch INTEGER NOT NULL DEFAULT 0,pending_reason TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS worker_event_inbox(device_id TEXT NOT NULL,worker_seq INTEGER NOT NULL,payload TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(device_id,worker_seq));
 CREATE TABLE IF NOT EXISTS task_events(coord_seq INTEGER PRIMARY KEY AUTOINCREMENT,device_id TEXT,worker_seq INTEGER,payload TEXT NOT NULL,UNIQUE(device_id,worker_seq));
-CREATE INDEX IF NOT EXISTS tasks_by_plan ON tasks(plan_id);`
+CREATE INDEX IF NOT EXISTS tasks_by_plan ON tasks(plan_id);
+CREATE INDEX IF NOT EXISTS task_log_tail ON task_events(json_extract(payload,'$.plan_id'),json_extract(payload,'$.task_id'),json_extract(payload,'$.type'),coord_seq);`
 
 func encode(v any) string {
 	b, e := json.Marshal(v)
@@ -65,7 +67,7 @@ func highWater(q dbQueryer) (int64, error) {
 	e := q.QueryRow(`SELECT COALESCE(MAX(coord_seq),0) FROM task_events`).Scan(&n)
 	return n, e
 }
-func loadPlan(tx *sql.Tx, id string) (protocol.PlanSnapshot, error) {
+func loadPlan(tx *sql.Tx, id string, includeLogs ...bool) (protocol.PlanSnapshot, error) {
 	var p protocol.PlanSnapshot
 	var b string
 	e := tx.QueryRow(`SELECT payload,status,paused,cancelled FROM plans WHERE id=?`, id).Scan(&b, &p.Status, &p.SchedulingPaused, &p.CancelRequested)
@@ -116,6 +118,45 @@ func loadPlan(tx *sql.Tx, id string) (protocol.PlanSnapshot, error) {
 		return p, e
 	}
 	for i := range p.Tasks {
+		if len(includeLogs) > 0 && includeLogs[0] {
+			logs, err := tx.Query(`SELECT payload FROM task_events WHERE json_extract(payload,'$.plan_id')=? AND json_extract(payload,'$.task_id')=? AND json_extract(payload,'$.type')='task.log' ORDER BY coord_seq DESC LIMIT 8`, id, p.Tasks[i].Task.TaskID)
+			if err != nil {
+				return p, err
+			}
+			var chunks []string
+			for logs.Next() {
+				var raw string
+				if err = logs.Scan(&raw); err != nil {
+					break
+				}
+				var ev protocol.TaskEvent
+				if err = json.Unmarshal([]byte(raw), &ev); err != nil {
+					break
+				}
+				var payload protocol.EventPayload
+				if err = json.Unmarshal(ev.Payload, &payload); err != nil {
+					break
+				}
+				chunks = append(chunks, payload.Text)
+			}
+			if err == nil {
+				err = logs.Err()
+			}
+			logs.Close()
+			if err != nil {
+				return p, err
+			}
+			for j := len(chunks) - 1; j >= 0; j-- {
+				p.Tasks[i].LogTail += chunks[j]
+			}
+			if len(p.Tasks[i].LogTail) > 16384 {
+				tail := p.Tasks[i].LogTail[len(p.Tasks[i].LogTail)-16384:]
+				for !utf8.ValidString(tail) {
+					tail = tail[1:]
+				}
+				p.Tasks[i].LogTail = tail
+			}
+		}
 		ar, err := tx.Query(`SELECT id,name,media_type,size_bytes,sha256 FROM artifacts WHERE plan_id=? AND task_id=? ORDER BY name`, id, p.Tasks[i].Task.TaskID)
 		if err != nil {
 			return p, err
@@ -226,7 +267,7 @@ func (s *Server) Plan(id string) (protocol.PlanSnapshot, error) {
 		return protocol.PlanSnapshot{}, e
 	}
 	defer tx.Rollback()
-	return loadPlan(tx, id)
+	return loadPlan(tx, id, true)
 }
 func (s *Server) devicesLocked(q dbQueryer) ([]protocol.DeviceSnapshot, error) {
 	out := []protocol.DeviceSnapshot{}
@@ -287,7 +328,7 @@ func (s *Server) Snapshot() (protocol.FleetSnapshot, error) {
 	}
 	out.Plans = []protocol.PlanSnapshot{}
 	for _, id := range ids {
-		p, e := loadPlan(tx, id)
+		p, e := loadPlan(tx, id, true)
 		if e != nil {
 			return out, e
 		}
@@ -450,7 +491,7 @@ func (s *Server) AppendEvent(device string, ev protocol.TaskEvent) (int64, error
 				return watermark, err
 			}
 			watermark++
-			if _, err := tx.Exec(`UPDATE tasks SET status='failed',error=? WHERE id=? AND status NOT IN ('succeeded','failed','cancelled')`, encode(&protocol.Error{Code: "PROTOCOL_VIOLATION", Message: violation.Message}), next.TaskID); err != nil {
+			if _, err := tx.Exec(`UPDATE tasks SET status='failed',error=? WHERE id=? AND status IN ('dispatched','accepted','running')`, encode(&protocol.Error{Code: "PROTOCOL_VIOLATION", Message: violation.Message}), next.TaskID); err != nil {
 				return watermark, err
 			}
 			if err := refreshPlan(tx, next.PlanID); err != nil {
@@ -505,12 +546,12 @@ func (s *Server) AppendEvent(device string, ev protocol.TaskEvent) (int64, error
 			}
 			target = "succeeded"
 		case "task.failed":
-			if status == "queued" || protocol.Terminal(status) {
+			if status != "dispatched" && status != "accepted" && status != "running" {
 				return commitPrefix(protocol.Err("INVALID_EVENT", "task already terminal"))
 			}
 			target = "failed"
 		case "task.cancelled":
-			if status == "queued" || protocol.Terminal(status) {
+			if status != "dispatched" && status != "accepted" && status != "running" {
 				return commitPrefix(protocol.Err("INVALID_EVENT", "task already terminal"))
 			}
 			target = "cancelled"
@@ -602,7 +643,7 @@ func (s *Server) Control(id, action string) (protocol.PlanSnapshot, error) {
 	if e != nil {
 		return p, e
 	}
-	p, e = loadPlan(tx, id)
+	p, e = loadPlan(tx, id, true)
 	if e != nil {
 		return p, e
 	}

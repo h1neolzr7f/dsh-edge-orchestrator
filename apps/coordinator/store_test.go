@@ -106,3 +106,22 @@ func TestUnassignedQueuedTaskRejectsWorkerEvents(t *testing.T) {
 		t.Fatal("rejected event changed task state")
 	}
 }
+
+func TestPlanSnapshotHydratesRecordedLogTail(t *testing.T) {
+	s := setup(t)
+	s.Submit(samplePlan())
+	s.mu.Lock()
+	s.db.Exec(`UPDATE tasks SET status='running' WHERE id='t'`)
+	s.mu.Unlock()
+	ev := protocol.TaskEvent{EventID: "cold_log", PlanID: "p", TaskID: "t", DeviceID: "w", WorkerSeq: 1, TaskSeq: 1, Type: "task.log", Timestamp: time.Now().UTC(), Payload: json.RawMessage(`{"text":"before snapshot\n"}`)}
+	if _, e := s.AppendEvent("w", ev); e != nil {
+		t.Fatal(e)
+	}
+	snap, e := s.Plan("p")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if snap.Tasks[0].LogTail != "before snapshot\n" {
+		t.Fatalf("lost pre-barrier log: %q", snap.Tasks[0].LogTail)
+	}
+}

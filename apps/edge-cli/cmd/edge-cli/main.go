@@ -49,7 +49,7 @@ func run() error {
 			reason = args[2]
 		}
 		out, e = c.ResolveApproval(ctx, args[1], protocol.ApprovalDecision{Decision: decision, Reason: reason})
-	case "pair":
+	case "pair", "pair-recover":
 		if len(args) > 2 {
 			return fmt.Errorf("pair [DEVICE_ID]")
 		}
@@ -57,7 +57,10 @@ func run() error {
 		if len(args) == 2 {
 			hint = args[1]
 		}
-		out, e = c.CreatePairing(ctx, protocol.PairingRequest{DeviceHint: hint, CoordinatorURL: *endpoint})
+		if args[0] == "pair-recover" && hint == "" {
+			return fmt.Errorf("pair-recover DEVICE_ID")
+		}
+		out, e = c.CreatePairing(ctx, protocol.PairingRequest{DeviceHint: hint, CoordinatorURL: *endpoint, RecoverExisting: args[0] == "pair-recover"})
 	case "devices":
 		out, e = c.Devices(ctx)
 	case "snapshot":

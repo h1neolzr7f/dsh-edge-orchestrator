@@ -64,7 +64,7 @@ Worker 的 client.hello payload：
 
 link.resume 使用相同 role、device_id 和对应业务游标字段，在已认证连接上重新对账。Controller 不用 last_worker_seq 恢复视图，Worker 不用 last_coord_seq 恢复 outbox。首次连接相应游标为 0。
 
-身份密钥在首次配对时生成，短期令牌不替代设备身份。Worker 数据库丢失必须重新配对并分配新 device_id，不能用旧身份把 worker_seq 重置为 1。
+首次配对生成高熵设备令牌，本地账本绑定 device_id 与 Coordinator endpoint。已登记 Worker 数据库丢失必须恢复原账本，或配对新的 device_id，不能把历史身份的 worker_seq 重置为1。仅首次兑换响应丢失且尚未登记时，Controller可用 POST /v1/pairings 的 recover_existing:true 与非空 device_hint 签发一次性恢复码；兑换和凭据替换同事务，登记状态在创建/兑换时双重核验。
 
 ## 4.3 Device Manifest
 
@@ -291,3 +291,7 @@ Worker 的 task.started/progress/log/succeeded/failed/cancelled 映射 UI step.s
 ~~~
 
 示例为真实空文件哈希；生产值必须匹配文件。分块默认 4 MiB，记录确认 offset，完成后校验总大小和 SHA-256，才标记 ready 并发布 artifact.ready。ready 内容不可覆盖；(task_id, name) 唯一。任务要求的输出必须在 succeeded 前上传完成，失败则任务不能报成功。下载为鉴权的 GET /v1/artifacts/{artifact_id}，支持 Range；WSS artifact.download 只返回引用，不内嵌文件。
+
+## V1 快照日志尾部
+
+TaskSnapshot.log_tail 是可选、最多16KiB的真实 task.log 尾部，在同一快照事务内读取，使用任务/类型索引取末8个日志块。它与 snapshot_coord_seq 屏障一致。Dart冷启动/游标过期基线从该字段恢复日志；旧服务端可退回已提交的 stdout_summary/stderr_summary。单卡刷新携带日志尾部后，小于等于该卡屏障的增量日志不得重复追加；全局游标仍只随完整事件页推进。

@@ -198,6 +198,7 @@ type EventPayload struct {
 	Error     *Error          `json:"error,omitempty"`
 }
 type TaskSnapshot struct {
+	LogTail       string          `json:"log_tail,omitempty"`
 	PendingReason string          `json:"pending_reason,omitempty"`
 	Task          TaskEnvelope    `json:"task"`
 	Status        string          `json:"status"`

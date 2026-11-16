@@ -31,7 +31,17 @@ export DSH_CONTROLLER_TOKEN='your-controller-secret'
 ./dist/linux-amd64/edge-agent --id workstation-a --pair PAIRING_CODE --coordinator https://coordinator.example:8740 --ca /private/ca.pem --db /private/fleet/worker.db --workspace workspace/project=/absolute/repository --allow-programs '["/absolute/path/to/node"]'
 ```
 
-后续启动省去 --pair、--id 与 DSH_WORKER_TOKEN，保留同一数据库、Coordinator URL、工作区和允许程序配置。配对码十分钟失效且仅能兑换一次，凭据绑定设备和 endpoint。POSIX 数据库及 sidecar0600；Windows 将数据库放在仅当前用户可访问的专用目录并配置 ACL。静态 DSH_WORKER_TOKENS/DSH_WORKER_TOKEN 方式继续可用。V1 不提供令牌撤销/轮换接口。
+后续启动省去 --pair、--id 与 DSH_WORKER_TOKEN，保留同一数据库、Coordinator URL、工作区和允许程序配置。配对码十分钟失效且仅能兑换一次，凭据绑定设备和 endpoint。POSIX 数据库及 sidecar0600；Windows 将数据库放在仅当前用户可访问的专用目录并配置 ACL。静态 DSH_WORKER_TOKENS/DSH_WORKER_TOKEN 方式继续可用。V1 不提供通用令牌撤销/轮换接口，首次配对中断恢复见下文。
+
+## 首次配对中断的恢复
+
+若首次兑换的响应丢失、令牌还没存入 Worker，Controller 可为尚未登记过的同一设备 ID 签发恢复码：
+
+```bash
+edge-cli --url https://coordinator.example:8740 --ca /private/ca.pem pair-recover workstation-a
+```
+
+然后用新码重新执行 edge-agent --pair，仍使用相同 ID 和本地数据库。该码绑定 ID、一次性原子兑换，替换丢失的首次凭据；旧码及旧令牌不再可用。仅 Controller 能发码。已经登记或产生历史事件的设备禁止这种恢复，防止 worker_seq 重置破坏账本；应恢复原 Worker 数据库，或使用新 device_id。恢复码不提供通用令牌撤销/轮换框架。
 
 ## 审批与任务
 

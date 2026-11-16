@@ -19,16 +19,16 @@
 | 检查 | 结果 |
 |---|---|
 | go schema生成逐字比较 + jsonschema Draft2020-12 check_schema | PASS，新增审批/配对/输出/上传定义齐全 |
-| bash scripts/check.sh | PASS，8个Go模块test/vet + Node真实进程联调；Node2.275s |
-| go test -race ./tests ./apps/coordinator ./apps/edge-agent ./packages/edge-link | PASS，无race；root86.631s/coordinator3.749s/agent11.171s/edge-link1.032s |
+| bash scripts/check.sh | PASS，8个Go模块test/vet + Node真实进程联调；最终Node1.991s |
+| go test -race ./tests ./apps/coordinator ./apps/edge-agent ./packages/edge-link | PASS，无race；最终root97.414s/coordinator4.177s/agent10.959s/edge-link有效缓存PASS |
 | bash scripts/build.sh（本地工作树GOFLAGS=-buildvcs=false） | PASS，CGO_ENABLED=0；Linux amd64/arm64、Windows amd64，共9程序 |
-| bash scripts/check-ui.sh | PASS，Dart analyze无问题、6测试；Flutter analyze无问题、2 widget测试 |
+| bash scripts/check-ui.sh | PASS，Dart analyze无问题、7测试；Flutter analyze无问题、2 widget测试 |
 | Node18 插件真实联调 | PASS，全部8工具，2.202s |
 | 固定DSH SDK0.2.2-rc.1实际schema验证器 | PASS，8个工具定义，非伪造defineTool兼容层 |
 | GitHub原生Linux/Windows CI（M-D，run43873573475） | 两平台Go+Node check/race PASS；Linux9构建PASS |
 | bash scripts/demo-v1-full.sh | succeeded，2台动态配对Worker，真实补丁+JUnit+Gitdiff+下游挂载汇总 |
 
-演示证据见 [V1_DEMO_EVIDENCE.json](V1_DEMO_EVIDENCE.json)：补丁163字节，两个真实 node:test 任务执行窗口重叠826ms，汇总产物63字节且SHA256核验通过。报告内容由实际测试程序产生；不是预先伪造成功文本。示例命令的临时凭据与证书仅在本地测试生命周期内使用。
+演示证据见 [V1_DEMO_EVIDENCE.json](V1_DEMO_EVIDENCE.json)：补丁163字节，首次演示两个真实 node:test 任务执行窗口重叠826ms，修复后的最终演示重叠823ms，汇总产物63字节且SHA256核验通过。报告内容由实际测试程序产生；不是预先伪造成功文本。示例命令的临时凭据与证书仅在本地测试生命周期内使用。
 
 ## API 清单
 
@@ -61,4 +61,28 @@ M-E最初Dart依赖解析晚于代码创建，首次测试不是RED，已如实�
 - Flutter3.50将SDK Material入口标记弃用；为兼容现有DSH版本保留官方仍导出的入口，只对该import定点抑制弃用提示，不屏蔽其他分析诊断。
 - 自动审批曾拒绝Flutter实例元数据/Google遥测请求。后续使用已核对源码的标准CI/遥测关闭配置，去除了被拒绝的网络行为；没有修改SDK或访问受保护端点。
 
-最终整分支审查结果及合并SHA在交付收尾时追加。
+## 最终整分支审查与修复
+
+独立整分支审查覆盖全部97文件，记录于 [V1_FINAL_REVIEW.md](V1_FINAL_REVIEW.md)。原始意见为1项Critical与7项Important；它们均进入同一修复轮，未以第二次审查代替复现测试。
+
+| 发现 | 最终行为与RED→GREEN证据 |
+|---|---|
+| 审批前/终态产物授权 | Worker仅dispatched/accepted/running可传输；发布事务再次核验，跨取消的哈希不发布；完成会话同所有者重复查询/完成仍幂等。HTTP测试实际复现待批泄漏和终态写入后转绿 |
+| 非法事件改坏未派发任务 | failed/cancelled与隔离失败只影响实际执行任务；queued/waiting/rejected原状态保持，隔离推进worker水位，后续其他任务正常，历史重复仍ACK；waiting不再发Worker reconcile |
+| 完整补丁文件的EOF续传 | 真实ServeContent剥离416 ETag的配置下复现失败；以新的已认证成功响应获取摘要并验证，绝不信任本地自算哈希 |
+| 崩溃后的终态工作区 | 终态账本作为持久清理队列，重启重试，非续跑任务恢复失败后也清理；真实Git注册/目录消失且诊断保留 |
+| Go重定向外送 | HTTPS API、上传/下载、公开兑换及WSS一律拒绝跳转，复制调用者Transport但不放行重定向；真实HTTPS→HTTP目标收到0次请求，重定向为永久语义错误 |
+| Cordis幂等重试 | 稳定ID/Key和存储创建时间恢复；丢失成功响应后重放、并发/普通重试、单任务再次派发均复用Plan；修改语义仍IDEMPOTENCY_CONFLICT |
+| 冷开/重建丢日志 | Go一致快照增加有索引的16KiB真实日志尾；Dart恢复该尾部/已提交摘要，再追加屏障后的日志，冷开与游标过期测试转绿 |
+| 首次配对响应丢失 | Controller绑定设备ID签发一次性恢复码；实际丢弃HTTPS响应后同Agent成功恢复并持久化，独立二次兑换失败；已登记身份及登记竞态拒绝替换，保护历史事件序号 |
+
+全量回归还复现了共享Git仓库的并发建工作区失败：全局git worktree prune会删除另一Worker尚未写完gitdir/commondir的全新元数据，即使设置较老expire仍然如此。已改为只对当前checkout执行带双force的targeted remove并验证自身注册消失，不再全局prune；确定性“他人正在创建的元数据目录必须保留”用例先失败再通过，原跨Worker并行流程连续3次通过。此处修订了早期M-A计划中的全局prune步骤，保留其他陈旧工作区由仓库所有者处理，避免删除不属于本任务的资产。
+
+### 保留的小问题
+
+- 未完成上传若最终哈希失败，当前会话不能清零修复；稳定源文件后换一个产物名称/新会话重传。不会将错误内容发布为ready。
+- Cordis下载保存时磁盘写满，可能残留本次新建的部分文件；清除该文件后重试。不会覆盖既有文件；目录保持私有。
+
+这些是资源/损坏后的恢复便利性问题，已在运行说明披露；没有阻塞正确执行、授权或完整性验证。日志尾部初实现曾放在内部调度/事件刷新的loadPlan热路径，使8MiB回放race压测在120s窗口失败（2051条生成、1630条已确认）。已把补齐限制为对外Plan/Fleet/控制响应的一致快照读取，内部调度不读日志；相同8MiB race回放随后50.778s通过，未放宽任何时限。最终完整Go/Node回归及竞争检测已通过；Dart7测试、Flutter2测试与分析、9个构建、schema和演示均通过。最终原生CI见 [PR#4 checks](https://github.com/h1neolzr7f/dsh-edge-orchestrator/pull/4/checks)，合并时核验。
+
+实施决定补充：首次配对恢复只允许从未登记过的ID，已有事件历史不能用新账本覆盖；这保留worker_seq契约，代价是已登记设备仍需恢复原数据库或换新ID。

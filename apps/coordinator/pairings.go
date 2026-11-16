@@ -45,15 +45,24 @@ func (s *Server) CreatePairing(in protocol.PairingRequest) (protocol.Pairing, er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := protocol.Pairing{CoordinatorURL: in.CoordinatorURL, ExpiresAt: time.Now().UTC().Add(10 * time.Minute)}
-	if in.DeviceHint != "" && !protocol.ValidID(in.DeviceHint) {
+	if (in.DeviceHint != "" && !protocol.ValidID(in.DeviceHint)) || (in.RecoverExisting && in.DeviceHint == "") {
 		return out, protocol.Err("INVALID_PAYLOAD", "invalid device hint")
+	}
+	if in.RecoverExisting {
+		var registered int
+		if e := s.db.QueryRow(`SELECT COUNT(*) FROM devices WHERE id=?`, in.DeviceHint).Scan(&registered); e != nil {
+			return out, e
+		}
+		if registered != 0 {
+			return out, protocol.Err("DEVICE_ENROLLED", "restore the existing Worker ledger or use a new device ID")
+		}
 	}
 	code, e := randomSecret(8)
 	if e != nil {
 		return out, e
 	}
 	out.PairingCode = code
-	_, e = s.db.Exec(`INSERT INTO pairings(code,device_hint,expires_at) VALUES(?,?,?)`, out.PairingCode, in.DeviceHint, out.ExpiresAt.Unix())
+	_, e = s.db.Exec(`INSERT INTO pairings(code,device_hint,expires_at,recover_existing) VALUES(?,?,?,?)`, out.PairingCode, in.DeviceHint, out.ExpiresAt.Unix(), in.RecoverExisting)
 	return out, e
 }
 func (s *Server) ClaimPairing(in protocol.PairingClaim) (protocol.PairingCredential, error) {
@@ -86,12 +95,34 @@ func (s *Server) ClaimPairing(in protocol.PairingClaim) (protocol.PairingCredent
 	if e != nil {
 		return out, e
 	}
-	_, e = tx.Exec(`INSERT INTO device_credentials(device_id,token_hash,created_at) VALUES(?,?,?)`, in.DeviceID, tokenHash(token), time.Now().UTC().Format(time.RFC3339Nano))
+	var recoverExisting bool
+	if e = tx.QueryRow(`SELECT recover_existing FROM pairings WHERE code=?`, in.PairingCode).Scan(&recoverExisting); e != nil {
+		return out, e
+	}
+	if recoverExisting {
+		var registered int
+		if e = tx.QueryRow(`SELECT COUNT(*) FROM devices WHERE id=?`, in.DeviceID).Scan(&registered); e != nil {
+			return out, e
+		}
+		if registered != 0 {
+			return out, protocol.Err("DEVICE_ENROLLED", "device registered after recovery code creation; preserve its existing ledger")
+		}
+	}
+	insert := `INSERT INTO device_credentials(device_id,token_hash,created_at) VALUES(?,?,?)`
+	if recoverExisting {
+		insert += ` ON CONFLICT(device_id) DO UPDATE SET token_hash=excluded.token_hash,created_at=excluded.created_at`
+	}
+	_, e = tx.Exec(insert, in.DeviceID, tokenHash(token), time.Now().UTC().Format(time.RFC3339Nano))
 	if e != nil {
 		return out, protocol.Err("DEVICE_EXISTS", "device credential already exists")
 	}
 	if e = tx.Commit(); e != nil {
 		return out, e
+	}
+	if recoverExisting {
+		if session := s.sessions[in.DeviceID]; session != nil {
+			session.conn.Close()
+		}
 	}
 	return protocol.PairingCredential{DeviceID: in.DeviceID, WorkerToken: token}, nil
 }

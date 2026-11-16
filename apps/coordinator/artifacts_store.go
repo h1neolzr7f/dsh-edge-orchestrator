@@ -42,7 +42,7 @@ func (s *Server) assigned(device, plan, task string) bool {
 	return json.Unmarshal([]byte(raw), &t) == nil && t.TargetDeviceID == device
 }
 func (s *Server) required(device, id string) bool {
-	rows, e := s.db.Query(`SELECT payload FROM tasks WHERE status IN ('dispatched','accepted','running','waiting_approval')`)
+	rows, e := s.db.Query(`SELECT payload FROM tasks WHERE status IN ('dispatched','accepted','running')`)
 	if e != nil {
 		return false
 	}
@@ -67,7 +67,11 @@ func (s *Server) required(device, id string) bool {
 	}
 	return false
 }
-func (s *Server) completeArtifact(u artifactUpload) (protocol.ArtifactRef, error) {
+func (s *Server) workerMayTransfer(device, plan, task string) bool {
+	var status string
+	return s.db.QueryRow(`SELECT status FROM tasks WHERE id=? AND plan_id=?`, task, plan).Scan(&status) == nil && (status == "dispatched" || status == "accepted" || status == "running") && s.assigned(device, plan, task)
+}
+func (s *Server) completeArtifact(u artifactUpload, caller ...string) (protocol.ArtifactRef, error) {
 	ref := artifactRef(u)
 	if u.Completed {
 		return ref, nil
@@ -110,6 +114,14 @@ func (s *Server) completeArtifact(u artifactUpload) (protocol.ArtifactRef, error
 		return ref, e
 	}
 	defer tx.Rollback()
+	if len(caller) > 0 && caller[0] != "" {
+		var raw, status string
+		err := tx.QueryRow(`SELECT payload,status FROM tasks WHERE id=? AND plan_id=?`, u.Task, u.Plan).Scan(&raw, &status)
+		var task protocol.TaskEnvelope
+		if err != nil || json.Unmarshal([]byte(raw), &task) != nil || task.TargetDeviceID != caller[0] || (status != "dispatched" && status != "accepted" && status != "running") {
+			return ref, protocol.Err("FORBIDDEN", "task no longer has transfer authority")
+		}
+	}
 	_, e = tx.Exec(`INSERT INTO artifacts(id,plan_id,task_id,device_id,name,media_type,size_bytes,sha256,storage_path,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, u.ArtifactID, u.Plan, u.Task, u.Device, u.Name, u.Media, u.Size, u.Hash, ready, time.Now().UTC().Format(time.RFC3339Nano))
 	if e != nil {
 		return ref, e

@@ -85,6 +85,10 @@ func Open(cfg Config) (*Server, error) {
 			return nil, e
 		}
 	}
+	if e = ensureAuthorityColumns(db); e != nil {
+		db.Close()
+		return nil, e
+	}
 	if e = ensurePendingReason(db); e != nil {
 		db.Close()
 		return nil, e

@@ -30,8 +30,20 @@ class FleetProjectionStore {
     final id = incoming['plan']['plan_id'];
     final old = json['plans'][id];
     if (old == null ||
-        incoming['snapshot_coord_seq'] >= old['snapshot_coord_seq'])
+        incoming['snapshot_coord_seq'] >= old['snapshot_coord_seq']) {
       json['plans'][id] = incoming;
+      for (final task in incoming['tasks'] as List) {
+        final key = '$id/${task['task']['task_id']}';
+        final result = task['result'] as Map<String, dynamic>? ?? {};
+        final summary =
+            '${result['stdout_summary'] ?? ''}${result['stderr_summary'] ?? ''}';
+        if (task.containsKey('log_tail') || summary.isNotEmpty) {
+          final tail = task['log_tail'] as String? ?? summary;
+          json['logs'][key] =
+              tail.length <= 16384 ? tail : tail.substring(tail.length - 16384);
+        }
+      }
+    }
   }
 
   Future<void> _snapshot() async {
@@ -84,6 +96,9 @@ class FleetProjectionStore {
               final payload = event['payload'] as Map<String, dynamic>? ?? {};
               switch (event['type']) {
                 case 'task.log':
+                  final barrier =
+                      json['plans'][planId]?['snapshot_coord_seq'] as num? ?? 0;
+                  if (seq <= barrier) break;
                   final log =
                       '${json['logs'][key] ?? ''}${payload['text'] ?? ''}';
                   json['logs'][key] = log.length <= 16384
