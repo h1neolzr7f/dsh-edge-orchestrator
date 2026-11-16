@@ -6,3 +6,5 @@ for module in "${modules[@]}"; do
   go test "./${module}/..."
   go vet "./${module}/..."
 done
+
+node --test integrations/dsh-cordis-plugin/test/plugin.test.mjs
