@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol"
@@ -43,13 +44,30 @@ func (a *Agent) cleanupTaskWorkspace(t protocol.TaskEnvelope) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, removeErr := gitOutput(ctx, root, "worktree", "remove", "--force", workspace)
+	// The checkout is agent-owned and disposable even if a task locked it.
+	// Git requires force twice to remove a locked worktree deliberately.
+	_, removeErr := gitOutput(ctx, root, "worktree", "remove", "--force", "--force", workspace)
 	// A partial checkout or a previously removed registration still needs disk
 	// removal followed by pruning. Preserve the run directory and its diagnostics.
 	diskErr := os.RemoveAll(workspace)
 	_, pruneErr := gitOutput(ctx, root, "worktree", "prune")
-	if diskErr != nil || pruneErr != nil {
-		return errors.Join(removeErr, diskErr, pruneErr)
+	// Pruning can succeed while retaining a locked registration. Only treat
+	// removal errors as an idempotent success after verifying its absence.
+	listed, listErr := gitOutput(ctx, root, "worktree", "list", "--porcelain", "-z")
+	if diskErr != nil || pruneErr != nil || listErr != nil {
+		return errors.Join(removeErr, diskErr, pruneErr, listErr)
+	}
+	if len(listed) >= 256<<10 {
+		return errors.Join(removeErr, fmt.Errorf("workspace cleanup: worktree listing exceeds verification limit"))
+	}
+	for _, field := range strings.Split(listed, "\x00") {
+		if !strings.HasPrefix(field, "worktree ") {
+			continue
+		}
+		registered := filepath.FromSlash(strings.TrimPrefix(field, "worktree "))
+		if rel, err := filepath.Rel(workspace, registered); err == nil && rel == "." {
+			return errors.Join(removeErr, fmt.Errorf("workspace cleanup: Git worktree registration remains for %s", workspace))
+		}
 	}
 	return nil
 }

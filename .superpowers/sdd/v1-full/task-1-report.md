@@ -106,3 +106,39 @@ Windows behavioral RED/GREEN execution is not available on this Linux host. Its 
 - Reviewed Windows ownership checks around handle acquisition and bounded grace; both production cross-build and test cross-compilation passed. Native Windows execution remains required in the normal Windows environment.
 - No outputs/logs/state directories were swept, no artifact behavior was added, and no runtime core dependency was introduced.
 - No subagents or external reviewer were used for this task. The only verification constraints are native Windows execution and isolated-checkout VCS stamping described above.
+
+## Review fix round 1 — locked task worktrees
+
+Baseline: `0e3734bd0e4a4256108bd732598e9d2828a15736`.
+
+The review found that a task-created worktree lock makes `worktree remove --force` fail while disk removal and `worktree prune` succeed. Prune preserves locked metadata, so the original helper incorrectly reported success. This finding is confirmed and fixed.
+
+`cleanupTaskWorkspace` now deliberately removes its agent-owned disposable worktree using Git's double-force option, which is required for locked worktrees. After disk removal/pruning it verifies absence of the exact checkout registration using NUL-delimited porcelain output, handling whitespace in paths. Removal errors are ignored only when Git has positively confirmed registration absence. Listing failures, a remaining registration, disk/prune errors, or a capped/truncated-size listing return an error. The run directory and diagnostics remain unchanged; idempotent repeated cleanup is retained.
+
+Added focused real-Git test `TestCleanupTaskWorkspaceRemovesOwnedLockedRegistration` in `apps/edge-agent/workspace_cleanup_test.go`. It creates a committed repository, prepares the actual task checkout, locks it with `git worktree lock --reason ...`, calls production cleanup, verifies checkout and metadata absence plus diagnostic preservation, and repeats cleanup to verify idempotency.
+
+RED before the repair:
+
+```text
+PATH=/workspace/scratch/toolchains/go/bin:$PATH go test ./apps/edge-agent -run '^TestCleanupTaskWorkspaceRemovesOwnedLockedRegistration$' -count=1
+--- FAIL: TestCleanupTaskWorkspaceRemovesOwnedLockedRegistration (0.03s)
+    workspace_cleanup_test.go:50: locked registration survived cleanup: ...
+        worktree .../runs/28763da7684e2e28693b7d37876c18d7d6f2054cbf0556ff1a751ba9a014142c/workspace
+        detached
+        locked task-created lock
+FAIL .../apps/edge-agent 0.037s
+```
+
+GREEN after repair:
+
+```text
+PATH=/workspace/scratch/toolchains/go/bin:$PATH go test ./apps/edge-agent -run '^TestCleanupTaskWorkspaceRemovesOwnedLockedRegistration$' -count=1
+ok .../apps/edge-agent 0.042s
+PATH=/workspace/scratch/toolchains/go/bin:$PATH go test ./apps/edge-agent ./tests -run 'Test(CleanupTaskWorkspaceRemovesOwnedLockedRegistration|Phase2WorktreeCleanedUpAfterCompletion)$' -count=1
+ok .../apps/edge-agent 0.066s
+ok .../tests 0.501s
+```
+
+Additional covering verification: `go vet ./apps/edge-agent` and `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o /tmp/dsh-v1-agent-windows.test.exe ./apps/edge-agent` both exited 0. `git diff --check` passed. The full suite was not repeated for this focused checkout-cleanup fix. Native Windows execution remains delegated to the existing CI checkpoint.
+
+Self-review: force is restricted to the derived per-task checkout path, never the authorized source root; NUL framing avoids quoted/space-containing path ambiguity; exact `filepath.Rel == "."` matching avoids prefix collisions; the capped listing fails closed instead of falsely proving absence. No later-milestone scope changed.
