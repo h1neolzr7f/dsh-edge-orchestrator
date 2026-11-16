@@ -31,6 +31,11 @@ func TestScheduleLoadsActiveTasksOnceAcrossPlans(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Exclude the background scheduleLoop from both instrumentation setup and
+	// counter observation. Submit locks internally, so acquire this only after
+	// all plans exist and retain it through the measured pass and assertion.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, err := s.db.Exec(`UPDATE tasks SET status='accepted'`); err != nil {
 		t.Fatal(err)
 	}
@@ -40,9 +45,8 @@ func TestScheduleLoadsActiveTasksOnceAcrossPlans(t *testing.T) {
 	if _, err := s.db.Exec(`CREATE VIEW tasks AS SELECT id,plan_id,ikey,` + fn + `(payload) AS payload,status,task_seq,result,error,last_dispatch,pending_reason FROM counted_tasks`); err != nil {
 		t.Fatal(err)
 	}
-	s.mu.Lock()
+	reads = 0
 	err := s.schedule()
-	s.mu.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}
