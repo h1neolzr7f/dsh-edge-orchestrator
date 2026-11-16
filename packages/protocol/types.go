@@ -118,7 +118,13 @@ type ArtifactBinding struct {
 	Name       string `json:"name"`
 	MountPath  string `json:"mount_path"`
 }
+type OutputArtifact struct {
+	Path      string `json:"path"`
+	Name      string `json:"name"`
+	MediaType string `json:"media_type"`
+}
 type TaskEnvelope struct {
+	OutputArtifacts       []OutputArtifact  `json:"output_artifacts,omitempty"`
 	TaskID                string            `json:"task_id"`
 	PlanID                string            `json:"plan_id,omitempty"`
 	IdempotencyKey        string            `json:"idempotency_key,omitempty"`
@@ -230,4 +236,22 @@ type TaskReconcileSnapshot struct {
 	Status   string `json:"status,omitempty"`
 	TaskSeq  int64  `json:"task_seq"`
 	Error    *Error `json:"error,omitempty"`
+}
+
+// ArtifactUploadRequest identifies immutable bytes and their task provenance.
+type ArtifactUploadRequest struct {
+	PlanID    string `json:"plan_id"`
+	TaskID    string `json:"task_id"`
+	Name      string `json:"name"`
+	MediaType string `json:"media_type"`
+	SizeBytes int64  `json:"size_bytes"`
+	SHA256    string `json:"sha256"`
+}
+
+// ArtifactUploadSession contains the durable server-confirmed resume position.
+type ArtifactUploadSession struct {
+	UploadID        string `json:"upload_id"`
+	ArtifactID      string `json:"artifact_id"`
+	ChunkSize       int    `json:"chunk_size"`
+	ConfirmedOffset int64  `json:"confirmed_offset"`
 }

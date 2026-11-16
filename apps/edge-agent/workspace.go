@@ -203,16 +203,31 @@ func gitOutput(ctx context.Context, root string, args ...string) (string, error)
 	return out.String(), nil
 }
 func (a *Agent) prepareTask(ctx context.Context, t protocol.TaskEnvelope) (context.Context, error) {
-	if len(t.InputArtifacts) > 0 || len(t.InputArtifactBindings) > 0 {
-		return ctx, protocol.Err("UNSUPPORTED_PRECONDITION", "artifact transfer is not installed")
+	if len(t.InputArtifactBindings) > 0 {
+		return ctx, protocol.Err("ARTIFACT_BINDING_FAILED", "unresolved artifact bindings")
 	}
 	w := t.WorkspaceContext
 	if w == nil {
-		return ctx, nil
+		if len(t.InputArtifacts) == 0 {
+			return ctx, nil
+		}
+		dir := filepath.Join(a.taskDir(t.TaskID), "workspace")
+		if e := os.RemoveAll(dir); e != nil {
+			return ctx, e
+		}
+		if e := os.MkdirAll(dir, 0700); e != nil {
+			return ctx, e
+		}
+		if e := a.mountArtifacts(ctx, t, dir); e != nil {
+			return ctx, e
+		}
+		logical := a.artifactWorkspace(t)
+		if _, err := a.resolveWorkspacePath(logical, "."); err != nil {
+			return ctx, err
+		}
+		return context.WithValue(ctx, workspaceKey{}, preparedWorkspace{logical, dir}), nil
 	}
-	if w.PatchArtifactID != "" {
-		return ctx, protocol.Err("UNSUPPORTED_PRECONDITION", "patch artifact transfer is not installed")
-	}
+
 	root, e := a.resolveWorkspacePath(w.RootDir, ".")
 	if e != nil {
 		return ctx, e
@@ -222,15 +237,32 @@ func (a *Agent) prepareTask(ctx context.Context, t protocol.TaskEnvelope) (conte
 		return ctx, protocol.Err("WORKSPACE_MISMATCH", "Git HEAD does not match expected_git_head")
 	}
 	status, e := gitOutput(ctx, root, "status", "--porcelain", "--untracked-files=all")
-	if e != nil || status != "" {
+	if e != nil || (status != "" && w.PatchArtifactID == "") {
 		return ctx, protocol.Err("WORKSPACE_MISMATCH", "working tree must be clean including untracked files")
 	}
 	dir := filepath.Join(a.taskDir(t.TaskID), "workspace")
 	if e = os.MkdirAll(filepath.Dir(dir), 0700); e != nil {
 		return ctx, e
 	}
+	if _, err := os.Stat(dir); err == nil {
+		if e = a.cleanupTaskWorkspace(t); e != nil {
+			return ctx, e
+		}
+	}
 	if _, e = gitOutput(ctx, root, "worktree", "add", "--detach", dir, w.ExpectedGitHead); e != nil {
 		return ctx, protocol.Err("WORKSPACE_MISMATCH", e.Error())
+	}
+	if w.PatchArtifactID != "" {
+		patch, err := a.downloadArtifact(ctx, t, w.PatchArtifactID, "")
+		if err != nil {
+			return ctx, err
+		}
+		if _, err = gitOutput(ctx, dir, "apply", "--binary", "--index", patch); err != nil {
+			return ctx, protocol.Err("WORKSPACE_MISMATCH", err.Error())
+		}
+	}
+	if e = a.mountArtifacts(ctx, t, dir); e != nil {
+		return ctx, e
 	}
 	return context.WithValue(ctx, workspaceKey{}, preparedWorkspace{w.RootDir, dir}), nil
 }

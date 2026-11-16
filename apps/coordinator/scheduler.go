@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"database/sql"
 	"encoding/json"
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/orchestrator"
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol"
@@ -148,6 +149,35 @@ func (s *Server) schedule() error {
 				}
 				if snap.Status != "queued" {
 					continue
+				}
+				if isReady(t, p.Tasks) && len(t.InputArtifactBindings) > 0 {
+					bindingFailed := false
+					for _, b := range t.InputArtifactBindings {
+						var a protocol.InputArtifact
+						a.MountPath = b.MountPath
+						err := tx.QueryRow(`SELECT id,sha256 FROM artifacts WHERE task_id=? AND name=?`, b.FromTaskID, b.Name).Scan(&a.ArtifactID, &a.SHA256)
+						if err == sql.ErrNoRows {
+							bindingFailed = true
+							break
+						}
+						if err != nil {
+							return err
+						}
+						t.InputArtifacts = append(t.InputArtifacts, a)
+					}
+					if bindingFailed {
+						if _, e = tx.Exec(`UPDATE tasks SET status='rejected',error=? WHERE id=?`, encode(protocol.Err("ARTIFACT_BINDING_FAILED", "required output was not published")), t.TaskID); e != nil {
+							return e
+						}
+						if e = refreshPlan(tx, id); e != nil {
+							return e
+						}
+						continue
+					}
+					t.InputArtifactBindings = nil
+					if _, e = tx.Exec(`UPDATE tasks SET payload=? WHERE id=?`, encode(t), t.TaskID); e != nil {
+						return e
+					}
 				}
 				reason := ""
 				switch {

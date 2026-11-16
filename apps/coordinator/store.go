@@ -115,6 +115,26 @@ func loadPlan(tx *sql.Tx, id string) (protocol.PlanSnapshot, error) {
 	if e != nil {
 		return p, e
 	}
+	for i := range p.Tasks {
+		ar, err := tx.Query(`SELECT id,name,media_type,size_bytes,sha256 FROM artifacts WHERE task_id=? ORDER BY name`, p.Tasks[i].Task.TaskID)
+		if err != nil {
+			return p, err
+		}
+		for ar.Next() {
+			v := protocol.ArtifactRef{TaskID: p.Tasks[i].Task.TaskID}
+			if err = ar.Scan(&v.ArtifactID, &v.Name, &v.MediaType, &v.SizeBytes, &v.SHA256); err != nil {
+				ar.Close()
+				return p, err
+			}
+			v.DownloadURI = "/v1/artifacts/" + v.ArtifactID
+			p.Tasks[i].Artifacts = append(p.Tasks[i].Artifacts, v)
+		}
+		err = ar.Err()
+		ar.Close()
+		if err != nil {
+			return p, err
+		}
+	}
 	p.SnapshotCoordSeq, e = highWater(tx)
 	return p, e
 }
@@ -129,9 +149,7 @@ func (s *Server) Submit(p protocol.PlanEnvelope) (protocol.PlanAccepted, error) 
 		if !supportedCapability(t.Capability.ID) {
 			return out, protocol.Err("UNSUPPORTED_CAPABILITY", t.Capability.ID)
 		}
-		if (t.WorkspaceContext != nil && t.WorkspaceContext.PatchArtifactID != "") || len(t.InputArtifacts) > 0 || len(t.InputArtifactBindings) > 0 {
-			return out, protocol.Err("UNSUPPORTED_PRECONDITION", "artifact and patch transfer is not installed")
-		}
+
 	}
 	tx, e := s.db.Begin()
 	if e != nil {
@@ -626,7 +644,7 @@ func (s *Server) resolveAbsentCancellation(device, id string) error {
 
 func supportedCapability(id string) bool {
 	switch id {
-	case "device.inspect", "report.aggregate", "process.exec", "process.cancel", "filesystem.read", "filesystem.write", "git.inspect":
+	case "device.inspect", "report.aggregate", "process.exec", "process.cancel", "filesystem.read", "filesystem.write", "git.inspect", "artifact.upload":
 		return true
 	}
 	return false

@@ -28,10 +28,11 @@ func (a *Agent) runProcess(ctx context.Context, t protocol.TaskEnvelope) (json.R
 		}
 	} else {
 		var in struct {
-			Program   string   `json:"program"`
-			Args      []string `json:"args"`
-			CWD       string   `json:"cwd"`
-			TimeoutMS int64    `json:"timeout_ms"`
+			Program   string                    `json:"program"`
+			Args      []string                  `json:"args"`
+			CWD       string                    `json:"cwd"`
+			TimeoutMS int64                     `json:"timeout_ms"`
+			Outputs   []protocol.OutputArtifact `json:"output_artifacts,omitempty"`
 		}
 		if e := protocol.Decode(t.Input, &in); e != nil {
 			return nil, e

@@ -34,3 +34,7 @@ replace github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol => ./packa
 replace github.com/h1neolzr7f/dsh-edge-orchestrator/packages/edge-link => ./packages/edge-link
 
 replace github.com/h1neolzr7f/dsh-edge-orchestrator/packages/orchestrator => ./packages/orchestrator
+
+require github.com/h1neolzr7f/dsh-edge-orchestrator/packages/artifact v0.0.0
+
+replace github.com/h1neolzr7f/dsh-edge-orchestrator/packages/artifact => ./packages/artifact

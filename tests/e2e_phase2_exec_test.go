@@ -34,6 +34,19 @@ func TestMain(m *testing.M) {
 			fmt.Println("restart-start")
 			time.Sleep(time.Second)
 			fmt.Println("restart-finish")
+		case "artifact-large":
+			if err := os.WriteFile("large.bin", []byte(strings.Repeat("artifact", (10<<20)/8)), 0600); err != nil {
+				os.Exit(11)
+			}
+			fmt.Println("artifact-producer-once")
+		case "artifact-report":
+			b, err := os.ReadFile("README.md")
+			if err != nil || string(b) != "patched fixture\n" {
+				os.Exit(9)
+			}
+			if err = os.WriteFile("junit.xml", []byte("<testsuite tests=\"1\"/>"), 0600); err != nil {
+				os.Exit(10)
+			}
 		case "log":
 			fmt.Println("real-exec-log")
 			time.Sleep(300 * time.Millisecond)
@@ -172,8 +185,8 @@ func TestPhase2ParallelTestAndGitDiffWorkflow(t *testing.T) {
 		t.Fatalf("no logs or parallel overlap: starts=%v ends=%v", starts, ends)
 	}
 	// Parallelism is measured over each task's complete running interval,
-	// including required Git preflight. A millisecond Git read can legitimately
-	// finish before the other worker's payload process has finished starting.
+	// after Git preflight. A millisecond Git read can legitimately finish
+	// before the other worker's payload process has finished starting.
 	for _, v := range snap.Tasks {
 		if v.Task.TaskID == b.TaskID {
 			var r struct {

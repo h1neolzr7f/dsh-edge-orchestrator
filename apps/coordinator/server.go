@@ -26,16 +26,18 @@ type Config struct {
 	WorkerTokens    map[string]string
 }
 type Server struct {
-	cfg       Config
-	db        *sql.DB
-	mu        sync.Mutex
-	sessions  map[string]*session
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	closeOnce sync.Once
-	closing   bool
-	lastError error
+	cfg          Config
+	db           *sql.DB
+	mu           sync.Mutex
+	sessions     map[string]*session
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	closeOnce    sync.Once
+	closing      bool
+	lastError    error
+	artifactDir  string
+	artifactTemp bool
 }
 type wire struct {
 	kind, id string
@@ -70,7 +72,7 @@ func Open(cfg Config) (*Server, error) {
 		return nil, e
 	}
 	db.SetMaxOpenConns(1)
-	if _, e = db.Exec(schema); e != nil {
+	if _, e = db.Exec(schema + artifactSchema); e != nil {
 		db.Close()
 		return nil, e
 	}
@@ -86,6 +88,17 @@ func Open(cfg Config) (*Server, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{cfg: cfg, db: db, sessions: map[string]*session{}, ctx: ctx, cancel: cancel}
+	if cfg.DBPath == ":memory:" {
+		s.artifactDir, e = os.MkdirTemp("", "dsh-artifacts-")
+		s.artifactTemp = true
+	} else {
+		s.artifactDir = filepath.Join(filepath.Dir(cfg.DBPath), "artifacts")
+	}
+	if e != nil {
+		cancel()
+		db.Close()
+		return nil, e
+	}
 	s.wg.Add(1)
 	go s.scheduleLoop()
 	return s, nil
@@ -102,6 +115,9 @@ func (s *Server) Close() error {
 		s.mu.Unlock()
 		s.wg.Wait()
 		e = s.db.Close()
+		if s.artifactTemp {
+			e = errors.Join(e, os.RemoveAll(s.artifactDir))
+		}
 	})
 	return e
 }
@@ -121,6 +137,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, 200, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("/v1/link", s.workerLink)
+	mux.HandleFunc("/v1/artifacts/", s.artifactsHTTP)
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
 		if !sameToken(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), s.cfg.ControllerToken) {
 			writeJSON(w, 401, protocol.Error{Code: "UNAUTHORIZED", Message: "controller credential required"})
@@ -142,7 +159,7 @@ func writeError(w http.ResponseWriter, e error) {
 	}
 	status := 400
 	switch pe.Code {
-	case "PLAN_NOT_FOUND", "TASK_NOT_FOUND":
+	case "PLAN_NOT_FOUND", "TASK_NOT_FOUND", "ARTIFACT_NOT_FOUND":
 		status = 404
 	case "IDEMPOTENCY_CONFLICT", "EVENT_CONFLICT", "PLAN_TERMINAL", "PLAN_CANCELLING":
 		status = 409

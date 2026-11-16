@@ -5,6 +5,7 @@ use (
 	./apps/coordinator
 	./apps/edge-agent
 	./apps/edge-cli
+	./packages/artifact
 	./packages/edge-link
 	./packages/orchestrator
 	./packages/protocol

@@ -16,7 +16,7 @@ import (
 // completion, log drain, and output collection/upload; runner diagnostics remain.
 // It is idempotent and deliberately uses a fresh context after task cancellation.
 func (a *Agent) cleanupTaskWorkspace(t protocol.TaskEnvelope) error {
-	if t.WorkspaceContext == nil {
+	if t.WorkspaceContext == nil && len(t.InputArtifacts) == 0 {
 		return nil
 	}
 	dir := a.taskDir(t.TaskID)
@@ -37,6 +37,9 @@ func (a *Agent) cleanupTaskWorkspace(t protocol.TaskEnvelope) error {
 		if !a.logsDrained(t, dir) {
 			return fmt.Errorf("workspace cleanup: logs not drained")
 		}
+	}
+	if t.WorkspaceContext == nil {
+		return os.RemoveAll(workspace)
 	}
 	root, err := a.resolveWorkspacePath(t.WorkspaceContext.RootDir, ".")
 	if err != nil {

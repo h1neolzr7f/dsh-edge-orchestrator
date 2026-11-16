@@ -85,7 +85,7 @@ func schema(t reflect.Type) map[string]any {
 	panic(t.String())
 }
 func main() {
-	for _, v := range []any{protocol.Envelope{}, protocol.ClientHello{}, protocol.ServerWelcome{}, protocol.DeviceManifest{}, protocol.CapabilityManifest{}, protocol.PlanEnvelope{}, protocol.TaskEnvelope{}, protocol.TaskReceipt{}, protocol.TaskEvent{}, protocol.ArtifactRef{}, protocol.PlanSnapshot{}, protocol.FleetSnapshot{}, protocol.EventPage{}, protocol.EventPayload{}, protocol.DeviceRegistration{}, protocol.EventAck{}, protocol.TaskRequest{}, protocol.PlanAccepted{}, protocol.TaskReconcileSnapshot{}} {
+	for _, v := range []any{protocol.Envelope{}, protocol.ClientHello{}, protocol.ServerWelcome{}, protocol.DeviceManifest{}, protocol.CapabilityManifest{}, protocol.PlanEnvelope{}, protocol.TaskEnvelope{}, protocol.TaskReceipt{}, protocol.TaskEvent{}, protocol.ArtifactRef{}, protocol.ArtifactUploadRequest{}, protocol.ArtifactUploadSession{}, protocol.PlanSnapshot{}, protocol.FleetSnapshot{}, protocol.EventPage{}, protocol.EventPayload{}, protocol.DeviceRegistration{}, protocol.EventAck{}, protocol.TaskRequest{}, protocol.PlanAccepted{}, protocol.TaskReconcileSnapshot{}} {
 		schema(reflect.TypeOf(v))
 	}
 	defs["TaskEnvelope"].(map[string]any)["properties"].(map[string]any)["input"] = map[string]any{"type": "object"}

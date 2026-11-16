@@ -17,8 +17,9 @@ import (
 
 func capabilitySchemas() map[string]string {
 	return map[string]string{
-		"device.inspect": `{"type":"object"}`, "report.aggregate": `{"type":"object"}`,
-		"process.exec":     `{"type":"object","additionalProperties":false,"required":["program","args","cwd"],"properties":{"program":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}`,
+		"artifact.upload": `{"type":"object","required":["workspace","path","name","media_type"]}`,
+		"device.inspect":  `{"type":"object"}`, "report.aggregate": `{"type":"object"}`,
+		"process.exec":     `{"type":"object","additionalProperties":false,"required":["program","args","cwd"],"properties":{"program":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1},"output_artifacts":{"type":"array","items":{"type":"object","required":["path","name","media_type"]}}}}`,
 		"process.cancel":   `{"type":"object","additionalProperties":false,"required":["task_id"],"properties":{"task_id":{"type":"string"}}}`,
 		"filesystem.read":  `{"type":"object","additionalProperties":false,"required":["workspace","path"],"properties":{"workspace":{"type":"string"},"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"max_bytes":{"type":"integer","minimum":1,"maximum":262144}}}`,
 		"filesystem.write": `{"type":"object","additionalProperties":false,"required":["workspace","path","content"],"properties":{"workspace":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"boolean"}}}`,
@@ -204,13 +205,13 @@ func (a *Agent) inspectGit(ctx context.Context, t protocol.TaskEnvelope) (json.R
 	if e != nil {
 		return nil, e
 	}
-	stat, e := gitOutput(ctx, root, "diff", "--no-ext-diff", "--no-textconv", "--stat")
+	stat, e := gitOutput(ctx, root, "diff", "--no-ext-diff", "--no-textconv", "--stat", "HEAD")
 	if e != nil {
 		return nil, e
 	}
 	result := map[string]any{"head": strings.TrimSpace(head), "branch": strings.TrimSpace(branch), "status": status, "diff_stat": stat, "started_at": started}
 	if in.Mode == "diff" || in.Mode == "summary" {
-		diff, e := gitOutput(ctx, root, "diff", "--no-ext-diff", "--no-textconv")
+		diff, e := gitOutput(ctx, root, "diff", "--no-ext-diff", "--no-textconv", "HEAD")
 		if e != nil {
 			return nil, e
 		}
