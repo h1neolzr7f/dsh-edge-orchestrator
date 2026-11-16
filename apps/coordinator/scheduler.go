@@ -59,7 +59,7 @@ func (s *Server) schedule() error {
 	}
 	deviceLoad := map[string]int{}
 	capLoad := map[string]int{}
-	loadRows, e := s.db.Query(`SELECT payload FROM tasks WHERE status IN ('dispatched','accepted','running','waiting_approval')`)
+	loadRows, e := s.db.Query(`SELECT payload FROM tasks WHERE status IN ('dispatched','accepted','running')`)
 	if e != nil {
 		return e
 	}
@@ -95,7 +95,7 @@ func (s *Server) schedule() error {
 			}
 			active := 0
 			for _, t := range p.Tasks {
-				if !protocol.Terminal(t.Status) && t.Status != "queued" {
+				if !protocol.Terminal(t.Status) && t.Status != "queued" && t.Status != "waiting_approval" {
 					active++
 				}
 			}
@@ -109,7 +109,10 @@ func (s *Server) schedule() error {
 				if protocol.Terminal(snap.Status) {
 					continue
 				}
-				if t.Deadline != nil && !time.Now().Before(*t.Deadline) && snap.Status == "queued" {
+				if t.Deadline != nil && !time.Now().Before(*t.Deadline) && (snap.Status == "queued" || snap.Status == "waiting_approval") {
+					if e = invalidateApproval(tx, t.TaskID, "expired"); e != nil {
+						return e
+					}
 					if _, e = tx.Exec(`UPDATE tasks SET status='failed',error=? WHERE id=?`, encode(&protocol.Error{Code: "DEADLINE_EXCEEDED", Message: "deadline passed before dispatch"}), t.TaskID); e != nil {
 						return e
 					}
@@ -149,6 +152,15 @@ func (s *Server) schedule() error {
 				}
 				if snap.Status != "queued" {
 					continue
+				}
+				if isReady(t, p.Tasks) && t.RequiresApproval {
+					waiting, err := requestApproval(tx, t)
+					if err != nil {
+						return err
+					}
+					if waiting {
+						continue
+					}
 				}
 				if isReady(t, p.Tasks) && len(t.InputArtifactBindings) > 0 {
 					bindingFailed := false

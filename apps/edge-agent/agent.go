@@ -22,6 +22,7 @@ import (
 type Executor func(context.Context, protocol.TaskEnvelope) (json.RawMessage, error)
 type Config struct {
 	DBPath, DeviceID, Token, CoordinatorURL string
+	PairingCode                             string
 	Workspaces                              map[string]string
 	AllowedPrograms                         []string
 	TerminationGrace                        time.Duration
@@ -48,13 +49,16 @@ type Agent struct {
 }
 
 func Open(cfg Config) (*Agent, error) {
-	if cfg.DBPath == "" || !protocol.ValidID(cfg.DeviceID) || cfg.Token == "" || cfg.CoordinatorURL == "" {
+	if cfg.DBPath == "" || cfg.CoordinatorURL == "" {
 		return nil, fmt.Errorf("database, device ID, token and coordinator URL required")
 	}
 	if cfg.DBPath != ":memory:" {
 		if e := os.MkdirAll(filepath.Dir(cfg.DBPath), 0700); e != nil {
 			return nil, e
 		}
+	}
+	if e := secureIdentityFiles(cfg.DBPath); e != nil {
+		return nil, e
 	}
 	dataDir, programs, e := configureLocal(&cfg)
 	if e != nil {
@@ -73,14 +77,7 @@ func Open(cfg Config) (*Agent, error) {
 		db.Close()
 		return nil, e
 	}
-	var id string
-	e = db.QueryRow(`SELECT id FROM identity LIMIT 1`).Scan(&id)
-	if errors.Is(e, sql.ErrNoRows) {
-		_, e = db.Exec(`INSERT INTO identity(id) VALUES(?)`, cfg.DeviceID)
-	} else if e == nil && id != cfg.DeviceID {
-		e = fmt.Errorf("database belongs to device %s", id)
-	}
-	if e != nil {
+	if e = loadIdentity(db, &cfg); e != nil {
 		db.Close()
 		return nil, e
 	}

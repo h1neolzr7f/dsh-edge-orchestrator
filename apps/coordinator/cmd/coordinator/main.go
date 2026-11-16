@@ -23,8 +23,10 @@ func main() {
 		log.Fatal("--tls-cert and --tls-key required")
 	}
 	var tokens map[string]string
-	if e := json.Unmarshal([]byte(os.Getenv("DSH_WORKER_TOKENS")), &tokens); e != nil {
-		log.Fatal("DSH_WORKER_TOKENS must be a JSON device-ID/token map")
+	if raw := os.Getenv("DSH_WORKER_TOKENS"); raw != "" {
+		if e := json.Unmarshal([]byte(raw), &tokens); e != nil {
+			log.Fatal("DSH_WORKER_TOKENS must be a JSON device-ID/token map")
+		}
 	}
 	s, e := coordinator.Open(coordinator.Config{DBPath: *db, ControllerToken: os.Getenv("DSH_CONTROLLER_TOKEN"), WorkerTokens: tokens})
 	if e != nil {

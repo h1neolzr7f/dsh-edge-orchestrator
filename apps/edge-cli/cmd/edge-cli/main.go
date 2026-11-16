@@ -24,7 +24,7 @@ func run() error {
 	flag.Parse()
 	args := flag.Args()
 	if len(args) == 0 {
-		return fmt.Errorf("commands: devices | snapshot | submit FILE | plan ID | watch ID | cancel/pause/resume ID | events [AFTER [THROUGH]]")
+		return fmt.Errorf("commands: approvals | approve/deny ID [REASON] | pair [DEVICE_ID] | devices | snapshot | submit FILE | plan ID | watch ID | cancel/pause/resume ID | events [AFTER [THROUGH]]")
 	}
 	httpClient, e := edgelink.HTTPClient(*ca)
 	if e != nil {
@@ -34,6 +34,30 @@ func run() error {
 	ctx := context.Background()
 	var out any
 	switch args[0] {
+	case "approvals":
+		out, e = c.Approvals(ctx)
+	case "approve", "deny":
+		if len(args) < 2 || len(args) > 3 {
+			return fmt.Errorf("%s ID [REASON]", args[0])
+		}
+		decision := "approved"
+		if args[0] == "deny" {
+			decision = "denied"
+		}
+		reason := ""
+		if len(args) == 3 {
+			reason = args[2]
+		}
+		out, e = c.ResolveApproval(ctx, args[1], protocol.ApprovalDecision{Decision: decision, Reason: reason})
+	case "pair":
+		if len(args) > 2 {
+			return fmt.Errorf("pair [DEVICE_ID]")
+		}
+		hint := ""
+		if len(args) == 2 {
+			hint = args[1]
+		}
+		out, e = c.CreatePairing(ctx, protocol.PairingRequest{DeviceHint: hint, CoordinatorURL: *endpoint})
 	case "devices":
 		out, e = c.Devices(ctx)
 	case "snapshot":

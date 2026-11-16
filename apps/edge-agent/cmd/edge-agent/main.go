@@ -27,6 +27,7 @@ func (w workspaceFlags) Set(s string) error {
 	return nil
 }
 func main() {
+	pair := flag.String("pair", "", "single-use Coordinator pairing code")
 	id := flag.String("id", "", "paired device ID")
 	endpoint := flag.String("coordinator", "https://localhost:8740", "Coordinator HTTPS URL")
 	db := flag.String("db", "edge-agent.db", "persistent Worker SQLite path")
@@ -65,7 +66,7 @@ func main() {
 	if e != nil {
 		log.Fatal(e)
 	}
-	a, e := agent.Open(agent.Config{DBPath: *db, DeviceID: *id, Token: os.Getenv("DSH_WORKER_TOKEN"), CoordinatorURL: *endpoint, HTTPClient: client, Workspaces: roots, AllowedPrograms: allowed, TerminationGrace: *grace})
+	a, e := agent.Open(agent.Config{PairingCode: *pair, DBPath: *db, DeviceID: *id, Token: os.Getenv("DSH_WORKER_TOKEN"), CoordinatorURL: *endpoint, HTTPClient: client, Workspaces: roots, AllowedPrograms: allowed, TerminationGrace: *grace})
 	if e != nil {
 		log.Fatal(e)
 	}

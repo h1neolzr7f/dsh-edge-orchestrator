@@ -17,12 +17,7 @@ import (
 func (s *Server) artifactsHTTP(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	controller := sameToken(token, s.cfg.ControllerToken)
-	device := ""
-	for id, t := range s.cfg.WorkerTokens {
-		if sameToken(token, t) {
-			device = id
-		}
-	}
+	device := s.workerDevice(token)
 	if !controller && device == "" {
 		writeJSON(w, 401, protocol.Error{Code: "UNAUTHORIZED", Message: "artifact credential required"})
 		return

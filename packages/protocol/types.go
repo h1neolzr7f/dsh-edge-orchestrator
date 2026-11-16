@@ -124,6 +124,8 @@ type OutputArtifact struct {
 	MediaType string `json:"media_type"`
 }
 type TaskEnvelope struct {
+	RequiresApproval      bool              `json:"requires_approval,omitempty"`
+	ApprovalReason        string            `json:"approval_reason,omitempty"`
 	OutputArtifacts       []OutputArtifact  `json:"output_artifacts,omitempty"`
 	TaskID                string            `json:"task_id"`
 	PlanID                string            `json:"plan_id,omitempty"`

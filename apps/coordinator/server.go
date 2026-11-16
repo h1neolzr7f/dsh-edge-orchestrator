@@ -52,7 +52,7 @@ type session struct {
 }
 
 func Open(cfg Config) (*Server, error) {
-	if cfg.DBPath == "" || cfg.ControllerToken == "" || len(cfg.WorkerTokens) == 0 {
+	if cfg.DBPath == "" || cfg.ControllerToken == "" {
 		return nil, fmt.Errorf("database, controller token and per-device worker tokens required")
 	}
 	tokens := map[string]bool{cfg.ControllerToken: true}
@@ -75,7 +75,7 @@ func Open(cfg Config) (*Server, error) {
 		return nil, e
 	}
 	db.SetMaxOpenConns(1)
-	if _, e = db.Exec(schema + artifactSchema); e != nil {
+	if _, e = db.Exec(schema + artifactSchema + authoritySchema); e != nil {
 		db.Close()
 		return nil, e
 	}
@@ -139,6 +139,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		writeJSON(w, 200, map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("/v1/pairings/claim", s.claimPairingHTTP)
 	mux.HandleFunc("/v1/link", s.workerLink)
 	mux.HandleFunc("/v1/artifacts/", s.artifactsHTTP)
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
@@ -164,7 +165,7 @@ func writeError(w http.ResponseWriter, e error) {
 	switch pe.Code {
 	case "PLAN_NOT_FOUND", "TASK_NOT_FOUND", "ARTIFACT_NOT_FOUND":
 		status = 404
-	case "IDEMPOTENCY_CONFLICT", "EVENT_CONFLICT", "PLAN_TERMINAL", "PLAN_CANCELLING":
+	case "APPROVAL_CONFLICT", "PAIRING_UNAVAILABLE", "DEVICE_EXISTS", "APPROVAL_INACTIVE", "IDEMPOTENCY_CONFLICT", "EVENT_CONFLICT", "PLAN_TERMINAL", "PLAN_CANCELLING":
 		status = 409
 	case "STORE_ERROR", "INTERNAL_ERROR":
 		status = 500
@@ -173,6 +174,8 @@ func writeError(w http.ResponseWriter, e error) {
 }
 func (s *Server) controller(w http.ResponseWriter, r *http.Request) {
 	switch {
+	case r.URL.Path == "/v1/approvals" || strings.HasPrefix(r.URL.Path, "/v1/approvals/") || r.URL.Path == "/v1/pairings":
+		s.authorityHTTP(w, r)
 	case r.URL.Path == "/v1/plans" && r.Method == http.MethodPost:
 		var p protocol.PlanEnvelope
 		b := http.MaxBytesReader(w, r.Body, 2<<20)
@@ -250,12 +253,7 @@ func (s *Server) controller(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) workerLink(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	expected := ""
-	for id, t := range s.cfg.WorkerTokens {
-		if sameToken(token, t) {
-			expected = id
-		}
-	}
+	expected := s.workerDevice(token)
 	if expected == "" {
 		writeJSON(w, 401, protocol.Error{Code: "UNAUTHORIZED", Message: "worker credential required"})
 		return

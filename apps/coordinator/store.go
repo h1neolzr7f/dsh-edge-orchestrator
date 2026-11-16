@@ -575,8 +575,13 @@ func (s *Server) Control(id, action string) (protocol.PlanSnapshot, error) {
 			if _, e = tx.Exec(`UPDATE plans SET cancelled=1 WHERE id=?`, id); e != nil {
 				return p, e
 			}
-			if _, e = tx.Exec(`UPDATE tasks SET pending_reason='',status='cancelled' WHERE plan_id=? AND status='queued'`, id); e != nil {
+			if _, e = tx.Exec(`UPDATE tasks SET pending_reason='',status='cancelled' WHERE plan_id=? AND status IN ('queued','waiting_approval')`, id); e != nil {
 				return p, e
+			}
+			for _, t := range p.Tasks {
+				if e = invalidateApproval(tx, t.Task.TaskID, "cancelled"); e != nil {
+					return p, e
+				}
 			}
 			e = refreshPlan(tx, id)
 		}

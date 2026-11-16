@@ -1,5 +1,67 @@
 {
   "$defs": {
+    "Approval": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "decision_reason": {
+          "type": "string"
+        },
+        "device_id": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "resolved_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "plan_id",
+        "task_id",
+        "scope",
+        "reason",
+        "status",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "ApprovalDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision"
+      ],
+      "type": "object"
+    },
     "ArtifactBinding": {
       "additionalProperties": false,
       "properties": {
@@ -536,6 +598,77 @@
       ],
       "type": "object"
     },
+    "Pairing": {
+      "additionalProperties": false,
+      "properties": {
+        "coordinator_url": {
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "pairing_code": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pairing_code",
+        "coordinator_url",
+        "expires_at"
+      ],
+      "type": "object"
+    },
+    "PairingClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "device_id": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "pairing_code": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pairing_code",
+        "device_id"
+      ],
+      "type": "object"
+    },
+    "PairingCredential": {
+      "additionalProperties": false,
+      "properties": {
+        "device_id": {
+          "type": "string"
+        },
+        "worker_token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "device_id",
+        "worker_token"
+      ],
+      "type": "object"
+    },
+    "PairingRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "coordinator_url": {
+          "type": "string"
+        },
+        "device_hint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "coordinator_url"
+      ],
+      "type": "object"
+    },
     "PlanAccepted": {
       "additionalProperties": false,
       "properties": {
@@ -732,6 +865,9 @@
     "TaskEnvelope": {
       "additionalProperties": false,
       "properties": {
+        "approval_reason": {
+          "type": "string"
+        },
         "capability": {
           "$ref": "#/$defs/CapabilityRef"
         },
@@ -783,6 +919,9 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "requires_approval": {
+          "type": "boolean"
         },
         "target_device_id": {
           "type": "string"
