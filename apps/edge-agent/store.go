@@ -142,6 +142,12 @@ func (a *Agent) claim(t protocol.TaskEnvelope) (bool, error) {
 func (a *Agent) finish(t protocol.TaskEnvelope, result json.RawMessage, runErr error, cancelled bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	cancelled = cancelled || a.cancelled[t.TaskID]
+	// A verified persistent runner or completed exit record survives a parent
+	// stop even if shutdown won after execution returned but before this commit.
+	if t.Capability.ID == "process.exec" && a.processDetachedLocked(t) && a.canResumeProcess(t) {
+		return errAgentDetached
+	}
 	tx, e := a.db.Begin()
 	if e != nil {
 		return e

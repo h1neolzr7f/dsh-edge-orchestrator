@@ -114,6 +114,15 @@ func Open(cfg Config) (*Agent, error) {
 	}
 	return a, nil
 }
+
+// Every parent-root cancellation shares the marker/terminal commit mutex.
+// Task cancellation remains a separate durable fact in cancelTask.
+func (a *Agent) stopRoot() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.cancel()
+}
+
 func (a *Agent) Close() error {
 	var e error
 	a.closeOnce.Do(func() {
@@ -150,8 +159,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.runWG.Add(1)
 	a.mu.Unlock()
 	defer a.runWG.Done()
-	defer a.cancel()
-	stop := context.AfterFunc(ctx, a.cancel)
+	defer a.stopRoot()
+	stop := context.AfterFunc(ctx, a.stopRoot)
 	defer stop()
 	accepted, e := a.recoverTasks()
 	if e != nil {
@@ -476,6 +485,9 @@ func (a *Agent) launch(t protocol.TaskEnvelope) {
 			runErr = protocol.Err("interrupted_by_restart", "agent stopped before durable completion")
 		}
 		if e = a.finish(t, result, runErr, cancelled); e != nil {
+			if errors.Is(e, errAgentDetached) {
+				return
+			}
 			a.setError(e)
 			return
 		}
