@@ -398,20 +398,46 @@ func (s *Server) AppendEvent(device string, ev protocol.TaskEvent) (int64, error
 		if old != hash {
 			return watermark, protocol.Err("EVENT_CONFLICT", "worker_seq reused")
 		}
-		return watermark, nil
+		// A pending duplicate must retry draining: a prior call may have
+		// committed a quarantined predecessor before disconnecting the link.
+		var pending string
+		if e = tx.QueryRow(`SELECT payload FROM worker_event_inbox WHERE device_id=? AND worker_seq=?`, device, ev.WorkerSeq).Scan(&pending); e != nil {
+			return watermark, e
+		}
+		if pending == "" {
+			return watermark, nil
+		}
 	}
-	if !errors.Is(e, sql.ErrNoRows) {
+	if e != nil && !errors.Is(e, sql.ErrNoRows) {
 		return watermark, e
 	}
-	if _, e = tx.Exec(`INSERT INTO worker_event_inbox(device_id,worker_seq,payload,hash) VALUES(?,?,?,?)`, device, ev.WorkerSeq, encode(ev), hash); e != nil {
-		return watermark, e
+	if errors.Is(e, sql.ErrNoRows) {
+		if _, e = tx.Exec(`INSERT INTO worker_event_inbox(device_id,worker_seq,payload,hash) VALUES(?,?,?,?)`, device, ev.WorkerSeq, encode(ev), hash); e != nil {
+			return watermark, e
+		}
 	}
+	var next protocol.TaskEvent
 	commitPrefix := func(cause error) (int64, error) {
 		if _, err := tx.Exec(`ROLLBACK TO advance_event`); err != nil {
 			return watermark, err
 		}
 		if _, err := tx.Exec(`RELEASE advance_event`); err != nil {
 			return watermark, err
+		}
+		// Only business violations are poison. Storage failures retain the
+		// pending event so they can be retried without losing valid history.
+		var violation *protocol.Error
+		if errors.As(cause, &violation) && violation.Code == "INVALID_EVENT" {
+			if _, err := tx.Exec(`UPDATE worker_event_inbox SET payload='' WHERE device_id=? AND worker_seq=?`, device, watermark+1); err != nil {
+				return watermark, err
+			}
+			watermark++
+			if _, err := tx.Exec(`UPDATE tasks SET status='failed',error=? WHERE id=? AND status NOT IN ('succeeded','failed','cancelled')`, encode(&protocol.Error{Code: "PROTOCOL_VIOLATION", Message: violation.Message}), next.TaskID); err != nil {
+				return watermark, err
+			}
+			if err := refreshPlan(tx, next.PlanID); err != nil {
+				return watermark, err
+			}
 		}
 		if _, err := tx.Exec(`UPDATE devices SET last_worker_seq=? WHERE id=?`, watermark, device); err != nil {
 			return watermark, err
@@ -433,7 +459,6 @@ func (s *Server) AppendEvent(device string, ev protocol.TaskEvent) (int64, error
 		if _, e = tx.Exec(`SAVEPOINT advance_event`); e != nil {
 			return watermark, e
 		}
-		var next protocol.TaskEvent
 		if e = json.Unmarshal([]byte(b), &next); e != nil {
 			return commitPrefix(e)
 		}
@@ -447,7 +472,7 @@ func (s *Server) AppendEvent(device string, ev protocol.TaskEvent) (int64, error
 		}
 		var payload protocol.EventPayload
 		if e = protocol.Decode(next.Payload, &payload); e != nil {
-			return commitPrefix(e)
+			return commitPrefix(protocol.Err("INVALID_EVENT", e.Error()))
 		}
 		target := status
 		switch next.Type {

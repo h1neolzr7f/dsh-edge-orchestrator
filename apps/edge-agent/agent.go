@@ -454,6 +454,12 @@ func (a *Agent) launch(t protocol.TaskEnvelope) {
 		}
 		if e = a.finish(t, result, runErr, cancelled); e != nil {
 			a.setError(e)
+			return
+		}
+		// Process executors have drained their logs before returning. Future
+		// output uploads must also complete before this cleanup boundary.
+		if e = a.cleanupTaskWorkspace(t); e != nil {
+			a.setError(e)
 		}
 	}()
 }

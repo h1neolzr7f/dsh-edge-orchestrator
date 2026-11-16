@@ -56,6 +56,31 @@ func (s *Server) schedule() error {
 	if e != nil {
 		return e
 	}
+	deviceLoad := map[string]int{}
+	capLoad := map[string]int{}
+	loadRows, e := s.db.Query(`SELECT payload FROM tasks WHERE status IN ('dispatched','accepted','running','waiting_approval')`)
+	if e != nil {
+		return e
+	}
+	for loadRows.Next() {
+		var b string
+		if e = loadRows.Scan(&b); e != nil {
+			loadRows.Close()
+			return e
+		}
+		var t protocol.TaskEnvelope
+		if e = json.Unmarshal([]byte(b), &t); e != nil {
+			loadRows.Close()
+			return e
+		}
+		deviceLoad[t.TargetDeviceID]++
+		capLoad[t.TargetDeviceID+":"+t.Capability.ID]++
+	}
+	e = loadRows.Err()
+	loadRows.Close()
+	if e != nil {
+		return e
+	}
 	for _, id := range ids {
 		tx, e := s.db.Begin()
 		if e != nil {
@@ -68,31 +93,6 @@ func (s *Server) schedule() error {
 				return e
 			}
 			active := 0
-			deviceLoad := map[string]int{}
-			capLoad := map[string]int{}
-			loadRows, e := tx.Query(`SELECT payload FROM tasks WHERE status IN ('dispatched','accepted','running','waiting_approval')`)
-			if e != nil {
-				return e
-			}
-			for loadRows.Next() {
-				var b string
-				if e = loadRows.Scan(&b); e != nil {
-					loadRows.Close()
-					return e
-				}
-				var t protocol.TaskEnvelope
-				if e = json.Unmarshal([]byte(b), &t); e != nil {
-					loadRows.Close()
-					return e
-				}
-				deviceLoad[t.TargetDeviceID]++
-				capLoad[t.TargetDeviceID+":"+t.Capability.ID]++
-			}
-			e = loadRows.Err()
-			loadRows.Close()
-			if e != nil {
-				return e
-			}
 			for _, t := range p.Tasks {
 				if !protocol.Terminal(t.Status) && t.Status != "queued" {
 					active++

@@ -2,7 +2,9 @@ package tests
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	coordinator "github.com/h1neolzr7f/dsh-edge-orchestrator/apps/coordinator"
@@ -528,5 +530,46 @@ func TestPhase2GitInspectShowsDirtyDiff(t *testing.T) {
 	json.Unmarshal(result.Tasks[0].Result, &report)
 	if report.HEAD != e.head || !strings.Contains(report.Status, "README.md") || !strings.Contains(report.Diff, "+changed") {
 		t.Fatalf("dirty diff missing %s", result.Tasks[0].Result)
+	}
+}
+
+func TestPhase2WorktreeCleanedUpAfterCompletion(t *testing.T) {
+	e := newPhase2(t)
+	exe, _ := os.Executable()
+	job := task("cleanup_exec", "process.exec", map[string]any{"program": exe, "args": []string{"--phase2-workload", "log"}, "cwd": "workspace/project", "timeout_ms": 5000})
+	job.WorkspaceContext = &protocol.WorkspaceContext{RootDir: "workspace/project", ExpectedGitHead: e.head, Policy: "require_clean_or_match"}
+	snap := e.run(t, job)
+	if snap.Status != "succeeded" {
+		t.Fatalf("task failed: %s", input(snap))
+	}
+	h := sha256.Sum256([]byte(job.TaskID))
+	runDir := filepath.Join(filepath.Dir(e.cfgA.DBPath), "runs", hex.EncodeToString(h[:]))
+	workspace := filepath.Join(runDir, "workspace")
+	// Coordinator completion can race the local post-completion cleanup.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(workspace); os.IsNotExist(err) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("task worktree remains after completion: %s (%v)", workspace, err)
+	}
+	out, err := exec.Command("git", "-C", e.root, "worktree", "list", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatalf("list worktrees: %s %v", out, err)
+	}
+	if strings.Contains(string(out), filepath.ToSlash(workspace)) {
+		t.Fatalf("task worktree metadata remains: %s", out)
+	}
+	for _, name := range []string{"stdout.log", "stderr.log", "exit.json", "spec.json"} {
+		if _, err := os.Stat(filepath.Join(runDir, name)); err != nil {
+			t.Errorf("diagnostic %s lost: %v", name, err)
+		}
+	}
+	log, err := os.ReadFile(filepath.Join(runDir, "stdout.log"))
+	if err != nil || !strings.Contains(string(log), "real-exec-log") {
+		t.Fatalf("drained log lost: %s %v", log, err)
 	}
 }
