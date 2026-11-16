@@ -1,5 +1,7 @@
 # Phase 0/1 最小运行闭环
 
+本文记录 Phase 0/1 基线；当前代码还实现了 [Phase 2 真实执行能力](PHASE2_QUICKSTART.md)，以下原始阶段边界不代表最新能力上限。
+
 本轮实现为 Go Coordinator、Edge Agent、Edge CLI、共享协议/Schema 与自动化验收。DSH Go 手机应用、Cordis 插件和 Flutter 卡片仍属后续产品集成；当前 Controller 使用 CLI/HTTPS。
 
 ## 本机一键演示

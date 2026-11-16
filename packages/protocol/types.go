@@ -177,17 +177,26 @@ type TaskRequest struct {
 	TaskID string `json:"task_id"`
 }
 type EventPayload struct {
-	Status string          `json:"status,omitempty"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  *Error          `json:"error,omitempty"`
-}
-type TaskSnapshot struct {
-	Task      TaskEnvelope    `json:"task"`
-	Status    string          `json:"status"`
-	TaskSeq   int64           `json:"task_seq"`
+	Data      []byte          `json:"data,omitempty"`
+	Message   string          `json:"message,omitempty"`
+	Completed int             `json:"completed,omitempty"`
+	Total     int             `json:"total,omitempty"`
+	Stream    string          `json:"stream,omitempty"`
+	Offset    int64           `json:"offset,omitempty"`
+	Length    int64           `json:"length,omitempty"`
+	Text      string          `json:"text,omitempty"`
+	Status    string          `json:"status,omitempty"`
 	Result    json.RawMessage `json:"result,omitempty"`
 	Error     *Error          `json:"error,omitempty"`
-	Artifacts []ArtifactRef   `json:"artifacts"`
+}
+type TaskSnapshot struct {
+	PendingReason string          `json:"pending_reason,omitempty"`
+	Task          TaskEnvelope    `json:"task"`
+	Status        string          `json:"status"`
+	TaskSeq       int64           `json:"task_seq"`
+	Result        json.RawMessage `json:"result,omitempty"`
+	Error         *Error          `json:"error,omitempty"`
+	Artifacts     []ArtifactRef   `json:"artifacts"`
 }
 type PlanSnapshot struct {
 	Plan             PlanEnvelope   `json:"plan"`

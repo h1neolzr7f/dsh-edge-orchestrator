@@ -15,17 +15,24 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type Executor func(context.Context, protocol.TaskEnvelope) (json.RawMessage, error)
 type Config struct {
 	DBPath, DeviceID, Token, CoordinatorURL string
+	Workspaces                              map[string]string
+	AllowedPrograms                         []string
+	TerminationGrace                        time.Duration
 	HTTPClient                              *http.Client
 	Executor                                Executor
 }
 type Agent struct {
 	cfg             Config
+	dataDir         string
+	programs        map[string]string
+	resuming        map[string]bool
 	db              *sql.DB
 	mu              sync.Mutex
 	ctx             context.Context
@@ -49,12 +56,20 @@ func Open(cfg Config) (*Agent, error) {
 			return nil, e
 		}
 	}
+	dataDir, programs, e := configureLocal(&cfg)
+	if e != nil {
+		return nil, e
+	}
 	db, e := sql.Open("sqlite", cfg.DBPath)
 	if e != nil {
 		return nil, e
 	}
 	db.SetMaxOpenConns(1)
 	if _, e = db.Exec(schema); e != nil {
+		db.Close()
+		return nil, e
+	}
+	if e = ensureProcessColumns(db); e != nil {
 		db.Close()
 		return nil, e
 	}
@@ -76,7 +91,27 @@ func Open(cfg Config) (*Agent, error) {
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &Agent{cfg: cfg, db: db, ctx: ctx, cancel: cancel, active: map[string]context.CancelFunc{}, cancelled: map[string]bool{}}
+	a := &Agent{cfg: cfg, dataDir: dataDir, programs: programs, resuming: map[string]bool{}, db: db, ctx: ctx, cancel: cancel, active: map[string]context.CancelFunc{}, cancelled: map[string]bool{}}
+	rows, err := db.Query(`SELECT task_id FROM cancellations`)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			db.Close()
+			return nil, err
+		}
+		a.cancelled[id] = true
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
 	return a, nil
 }
 func (a *Agent) Close() error {
@@ -156,10 +191,10 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 func (a *Agent) Registration() protocol.DeviceRegistration {
 	caps := []protocol.CapabilityManifest{}
-	for _, id := range []string{"device.inspect", "report.aggregate"} {
-		caps = append(caps, protocol.CapabilityManifest{CapabilityID: id, Version: "1.0.0", Description: "Authorized Phase 1 built-in", InputSchema: json.RawMessage(`{"type":"object"}`), OutputSchema: json.RawMessage(`{"type":"object"}`), PermissionScope: id, ResourceClass: "cpu", MaxConcurrency: 4, Discovery: "static", Authorized: true})
+	for _, id := range []string{"device.inspect", "report.aggregate", "process.exec", "process.cancel", "filesystem.read", "filesystem.write", "git.inspect"} {
+		caps = append(caps, protocol.CapabilityManifest{CapabilityID: id, Version: "1.0.0", Description: "Authorized local capability", InputSchema: json.RawMessage(capabilitySchemas()[id]), OutputSchema: json.RawMessage(`{"type":"object"}`), PermissionScope: id, ResourceClass: "cpu", MaxConcurrency: 4, Discovery: "static", Authorized: true})
 	}
-	return protocol.DeviceRegistration{Manifest: protocol.DeviceManifest{DeviceID: a.cfg.DeviceID, DisplayName: a.cfg.DeviceID, Platform: protocol.Platform{OS: runtime.GOOS, Arch: runtime.GOARCH, Version: hostVersion()}, AgentVersion: "0.1.0", Labels: []string{}, Resources: hostResources(filepath.Dir(a.cfg.DBPath)), CapabilitiesRevision: 1}, Capabilities: caps}
+	return protocol.DeviceRegistration{Manifest: protocol.DeviceManifest{DeviceID: a.cfg.DeviceID, DisplayName: a.cfg.DeviceID, Platform: protocol.Platform{OS: runtime.GOOS, Arch: runtime.GOARCH, Version: hostVersion()}, AgentVersion: "0.2.0", Labels: []string{}, Resources: hostResources(filepath.Dir(a.cfg.DBPath)), CapabilitiesRevision: 2}, Capabilities: caps}
 }
 func (a *Agent) connect() error {
 	c, e := edgelink.Dial(a.ctx, a.cfg.CoordinatorURL+"/v1/link", a.cfg.Token, a.cfg.HTTPClient)
@@ -193,7 +228,7 @@ func (a *Agent) connect() error {
 	if e != nil {
 		return e
 	}
-	if e = send("client.hello", a.cfg.DeviceID, protocol.ClientHello{Role: "worker", DeviceID: a.cfg.DeviceID, AgentVersion: "0.1.0", ProtocolVersions: []string{protocol.Version}, LastWorkerSeq: last, PendingMessageIDs: []string{}}); e != nil {
+	if e = send("client.hello", a.cfg.DeviceID, protocol.ClientHello{Role: "worker", DeviceID: a.cfg.DeviceID, AgentVersion: "0.2.0", ProtocolVersions: []string{protocol.Version}, LastWorkerSeq: last, PendingMessageIDs: []string{}}); e != nil {
 		return e
 	}
 	m, e := receive()
@@ -233,6 +268,9 @@ func (a *Agent) connect() error {
 	if e = send("link.ready", a.cfg.DeviceID, map[string]bool{"ready": true}); e != nil {
 		return e
 	}
+	var pendingAck atomic.Int64
+	pendingAck.Store(welcome.Resume.LastWorkerSeq)
+	pumpError := make(chan error, 1)
 	pumpDone := make(chan struct{})
 	go func() {
 		defer close(pumpDone)
@@ -241,6 +279,7 @@ func (a *Agent) connect() error {
 		heartbeat := time.NewTicker(20 * time.Second)
 		defer heartbeat.Stop()
 		sent := welcome.Resume.LastWorkerSeq
+		persistedAck := sent
 		for {
 			select {
 			case <-ctx.Done():
@@ -251,7 +290,16 @@ func (a *Agent) connect() error {
 					return
 				}
 			case <-ticker.C:
-				events, e := a.outbox()
+				latest := pendingAck.Load()
+				if latest > persistedAck {
+					if err := a.ack(latest); err != nil {
+						pumpError <- err
+						c.Close()
+						return
+					}
+					persistedAck = latest
+				}
+				events, e := a.outbox(sent)
 				if e != nil {
 					c.Close()
 					return
@@ -273,7 +321,12 @@ func (a *Agent) connect() error {
 	for {
 		m, e = receive()
 		if e != nil {
-			return e
+			select {
+			case cause := <-pumpError:
+				return cause
+			default:
+				return e
+			}
 		}
 		switch m.Kind {
 		case "task.submit":
@@ -314,9 +367,13 @@ func (a *Agent) connect() error {
 			if e = protocol.Decode(m.Payload, &ack); e != nil {
 				return e
 			}
-			if e = a.ack(ack.LastWorkerSeq); e != nil {
-				return e
+			if ack.LastWorkerSeq < pendingAck.Load() {
+				return protocol.Err("EVENT_HISTORY_LOST", "coordinator acknowledgment went backwards")
 			}
+			if ack.LastWorkerSeq > protocol.MaxSequence {
+				return protocol.Err("INVALID_EVENT_ACK", "ack exceeds protocol limit")
+			}
+			pendingAck.Store(ack.LastWorkerSeq)
 		case "link.pong":
 		case "link.error":
 			var pe protocol.Error
@@ -349,27 +406,39 @@ func (a *Agent) launch(t protocol.TaskEnvelope) {
 	go func() {
 		defer a.wg.Done()
 		defer cancel()
-		defer func() { a.mu.Lock(); delete(a.active, t.TaskID); a.mu.Unlock() }()
+		defer func() { a.mu.Lock(); delete(a.resuming, t.TaskID); delete(a.active, t.TaskID); a.mu.Unlock() }()
 		claimed, e := a.claim(t)
 		if e != nil {
 			a.setError(e)
 			return
 		}
-		if !claimed {
+		a.mu.Lock()
+		resuming := a.resuming[t.TaskID]
+		a.mu.Unlock()
+		if !claimed && !resuming {
 			return
 		}
 		var result json.RawMessage
 		var runErr error
-		if t.WorkspaceContext != nil || len(t.InputArtifacts) > 0 || len(t.InputArtifactBindings) > 0 {
+		prepared, prepErr := ctx, error(nil)
+		if !resuming {
+			prepared, prepErr = a.prepareTask(ctx, t)
+		}
+		if prepErr != nil {
+			runErr = prepErr
+		} else if len(t.InputArtifacts) > 0 || len(t.InputArtifactBindings) > 0 {
 			runErr = protocol.Err("UNSUPPORTED_PRECONDITION", "workspace/artifact executors not installed")
 		} else if !supports(t) {
 			runErr = protocol.Err("UNSUPPORTED_CAPABILITY", t.Capability.ID)
-		} else if ctx.Err() != nil {
+		} else if ctx.Err() != nil && !resuming {
 			runErr = ctx.Err()
 		} else if a.cfg.Executor != nil {
-			result, runErr = a.cfg.Executor(ctx, t)
+			result, runErr = a.cfg.Executor(prepared, t)
 		} else {
-			result, runErr = a.execute(ctx, t)
+			result, runErr = a.execute(prepared, t)
+		}
+		if errors.Is(runErr, errAgentDetached) {
+			return
 		}
 		if runErr == nil && result != nil && !json.Valid(result) {
 			runErr = protocol.Err("INVALID_RESULT", "executor returned invalid JSON")
@@ -390,11 +459,19 @@ func (a *Agent) launch(t protocol.TaskEnvelope) {
 }
 func (a *Agent) setError(e error) { a.mu.Lock(); a.lastError = e; a.mu.Unlock() }
 func supports(t protocol.TaskEnvelope) bool {
-	return (t.Capability.ID == "device.inspect" || t.Capability.ID == "report.aggregate") && protocol.Matches(t.Capability.Version, "1.0.0")
+	_, ok := capabilitySchemas()[t.Capability.ID]
+	return ok && protocol.Matches(t.Capability.Version, "1.0.0")
 }
 func (a *Agent) execute(ctx context.Context, t protocol.TaskEnvelope) (json.RawMessage, error) {
 	if e := ctx.Err(); e != nil {
-		return nil, e
+		a.mu.Lock()
+		resuming := a.resuming[t.TaskID]
+		a.mu.Unlock()
+		// A recovered process still needs its monitor to stop the owned tree
+		// and drain logs even when cancellation was persisted before restart.
+		if t.Capability.ID != "process.exec" || !resuming {
+			return nil, e
+		}
 	}
 	switch t.Capability.ID {
 	case "device.inspect":
@@ -413,5 +490,5 @@ func (a *Agent) execute(ctx context.Context, t protocol.TaskEnvelope) (json.RawM
 		b, e := json.Marshal(map[string]any{"reports": input.Results, "count": len(input.Results)})
 		return b, e
 	}
-	return nil, protocol.Err("UNSUPPORTED_CAPABILITY", t.Capability.ID)
+	return a.executeLocal(ctx, t)
 }

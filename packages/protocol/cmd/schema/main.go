@@ -16,6 +16,9 @@ func schema(t reflect.Type) map[string]any {
 	if t == reflect.TypeOf(time.Time{}) {
 		return map[string]any{"type": "string", "format": "date-time"}
 	}
+	if t == reflect.TypeOf([]byte{}) {
+		return map[string]any{"type": "string", "contentEncoding": "base64"}
+	}
 	if t == reflect.TypeOf(json.RawMessage{}) {
 		return map[string]any{}
 	}
@@ -66,6 +69,9 @@ func schema(t reflect.Type) map[string]any {
 				}
 				if key == "sequence" || key == "concurrency_limit" || key == "max_concurrency" {
 					s["minimum"] = 1
+				}
+				if key == "pending_reason" {
+					s["enum"] = []string{"", "waiting_dependencies", "scheduling_paused", "concurrency_limit", "device_offline", "capability_unavailable", "device_busy"}
 				}
 				props[key] = s
 				if !strings.Contains(tag, "omitempty") {

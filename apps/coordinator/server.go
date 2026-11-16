@@ -80,6 +80,10 @@ func Open(cfg Config) (*Server, error) {
 			return nil, e
 		}
 	}
+	if e = ensurePendingReason(db); e != nil {
+		db.Close()
+		return nil, e
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{cfg: cfg, db: db, sessions: map[string]*session{}, ctx: ctx, cancel: cancel}
 	s.wg.Add(1)
@@ -319,7 +323,11 @@ func (s *Server) workerLink(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sessions[expected] = sess
 	s.wg.Add(1)
+	reconcileErr := s.queueReconcileLocked(expected)
 	s.mu.Unlock()
+	if reconcileErr != nil {
+		sess.conn.Close()
+	}
 	defer func() {
 		s.mu.Lock()
 		if s.sessions[expected] == sess {
@@ -378,22 +386,10 @@ func (s *Server) workerLink(w http.ResponseWriter, r *http.Request) {
 			if protocol.Decode(msg.Payload, &rec) != nil || rec.Validate() != nil || rec.DeviceID != expected {
 				return
 			}
-			s.mu.Lock()
-			var raw string
-			e = s.db.QueryRow(`SELECT payload FROM tasks WHERE id=?`, rec.TaskID).Scan(&raw)
-			if e == nil {
-				var task protocol.TaskEnvelope
-				e = json.Unmarshal([]byte(raw), &task)
-				if e == nil && task.TargetDeviceID == expected {
-					_, e = s.db.Exec(`UPDATE tasks SET status='accepted' WHERE id=? AND status='dispatched'`, rec.TaskID)
-				} else {
-					e = fmt.Errorf("wrong task receipt")
-				}
-			}
-			s.mu.Unlock()
-			if e != nil {
+			if e = s.RecordTaskAccepted(expected, rec); e != nil {
 				return
 			}
+
 		case "link.ping", "device.heartbeat":
 			if send("link.pong", msg.MessageID, map[string]bool{"ok": true}) != nil {
 				return

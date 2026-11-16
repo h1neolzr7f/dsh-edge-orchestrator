@@ -2,7 +2,7 @@
 
 按交付闭环组织，不以代码文件数量代替功能。优先做真实可用的跨设备执行链路。
 
-2026-11-15：Phase 0/1 核心 Go 运行闭环已实现，见 PHASE1_QUICKSTART.md 与 ../reports/PHASE0_PHASE1_VALIDATION.md。未勾选项可能包含已实现的子集；复合条目只有全部完成才勾选，手机、外网弱网与原生平台验收仍未完成。
+2026-11-15：Phase 2 真实执行能力已实现，最新验收见 ../reports/PHASE2_VALIDATION.md；Phase 0/1 核心 Go 运行闭环已实现，见 PHASE1_QUICKSTART.md 与 ../reports/PHASE0_PHASE1_VALIDATION.md。未勾选项可能包含已实现的子集；复合条目只有全部完成才勾选，手机、外网弱网与原生平台验收仍未完成。
 
 ## EPIC 0 — Edge Link Vertical Slice
 
@@ -29,10 +29,10 @@
 
 - [ ] E2-1 Windows/Linux/ARM 单文件 Agent。
 - [ ] E2-2 Device Inspector 和能力自动发现。
-- [ ] E2-3 process.exec。
-- [ ] E2-4 filesystem.read/write。
-- [ ] E2-5 git.inspect。
-- [ ] E2-6 Linux Setpgid 进程组 + SIGTERM/5秒/SIGKILL、Windows Job Object + TerminateJobObject；runner、PID 防复用、Agent 崩溃恢复与退出状态。
+- [x] E2-3 process.exec。
+- [x] E2-4 filesystem.read/write。
+- [x] E2-5 git.inspect。
+- [x] E2-6 Linux Setpgid 进程组 + SIGTERM/500ms/SIGKILL、Windows Job Object + TerminateJobObject；runner、PID 防复用、Agent 崩溃恢复与退出状态。
 - [ ] E2-7 Artifact upload 与 SHA-256。
 - [ ] E2-8 workspace_context 基准校验与隔离补丁；input_artifacts 下载、哈希及安全挂载，预检成功才 running。
 

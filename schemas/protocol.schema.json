@@ -376,12 +376,37 @@
     "EventPayload": {
       "additionalProperties": false,
       "properties": {
+        "completed": {
+          "type": "integer"
+        },
+        "data": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
         "error": {
           "$ref": "#/$defs/Error"
+        },
+        "length": {
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer"
         },
         "result": {},
         "status": {
           "type": "string"
+        },
+        "stream": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "total": {
+          "type": "integer"
         }
       },
       "required": [],
@@ -825,6 +850,18 @@
         },
         "error": {
           "$ref": "#/$defs/Error"
+        },
+        "pending_reason": {
+          "enum": [
+            "",
+            "waiting_dependencies",
+            "scheduling_paused",
+            "concurrency_limit",
+            "device_offline",
+            "capability_unavailable",
+            "device_busy"
+          ],
+          "type": "string"
         },
         "result": {},
         "status": {

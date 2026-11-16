@@ -34,7 +34,7 @@ func (s *Server) queue(device, kind, id string, v any) {
 	}
 }
 func (s *Server) schedule() error {
-	devices, e := s.devicesLocked()
+	devices, e := s.devicesLocked(s.db)
 	if e != nil {
 		return e
 	}
@@ -133,7 +133,7 @@ func (s *Server) schedule() error {
 					continue
 				}
 				// Retransmit on a lost receipt or a re-established worker session; Worker ledger deduplicates.
-				if snap.Status != "queued" {
+				if snap.Status == "dispatched" {
 					var last int64
 					if e = tx.QueryRow(`SELECT last_dispatch FROM tasks WHERE id=?`, t.TaskID).Scan(&last); e != nil {
 						return e
@@ -146,14 +146,45 @@ func (s *Server) schedule() error {
 					}
 					continue
 				}
-				if p.SchedulingPaused || active >= p.Plan.ConcurrencyLimit || !isReady(t, p.Tasks) {
+				if snap.Status != "queued" {
+					continue
+				}
+				reason := ""
+				switch {
+				case !isReady(t, p.Tasks):
+					reason = "waiting_dependencies"
+				case p.SchedulingPaused:
+					reason = "scheduling_paused"
+				case active >= p.Plan.ConcurrencyLimit:
+					reason = "concurrency_limit"
+				}
+				pending := func(reason string) error {
+					if snap.PendingReason == reason {
+						return nil
+					}
+					if _, err := tx.Exec(`UPDATE tasks SET pending_reason=? WHERE id=?`, reason, t.TaskID); err != nil {
+						return err
+					}
+					_, err := planEvent(tx, id, "plan.updated", p.Status)
+					return err
+				}
+				if reason != "" {
+					if e = pending(reason); e != nil {
+						return e
+					}
 					continue
 				}
 				chosen := ""
+				online, capable := false, false
 				for _, d := range devices {
-					if !d.Online || (t.TargetDeviceID != "" && t.TargetDeviceID != d.DeviceID) || !orchestrator.Supports(d.Capabilities, t.Capability) {
+					if !d.Online || (t.TargetDeviceID != "" && t.TargetDeviceID != d.DeviceID) {
 						continue
 					}
+					online = true
+					if !orchestrator.Supports(d.Capabilities, t.Capability) {
+						continue
+					}
+					capable = true
 					capacity := 0
 					for _, cap := range d.Capabilities {
 						if cap.CapabilityID == t.Capability.ID {
@@ -168,6 +199,15 @@ func (s *Server) schedule() error {
 					}
 				}
 				if chosen == "" {
+					reason = "device_busy"
+					if !online {
+						reason = "device_offline"
+					} else if !capable {
+						reason = "capability_unavailable"
+					}
+					if e = pending(reason); e != nil {
+						return e
+					}
 					continue
 				}
 				t.TargetDeviceID = chosen
@@ -190,7 +230,7 @@ func (s *Server) schedule() error {
 					}
 					t.Input = json.RawMessage(encode(map[string]any{"results": results}))
 				}
-				if _, e = tx.Exec(`UPDATE tasks SET status='dispatched',payload=?,last_dispatch=? WHERE id=?`, encode(t), time.Now().UnixMilli(), t.TaskID); e != nil {
+				if _, e = tx.Exec(`UPDATE tasks SET pending_reason='',status='dispatched',payload=?,last_dispatch=? WHERE id=?`, encode(t), time.Now().UnixMilli(), t.TaskID); e != nil {
 					return e
 				}
 				if _, e = planEvent(tx, id, "plan.updated", p.Status); e != nil {

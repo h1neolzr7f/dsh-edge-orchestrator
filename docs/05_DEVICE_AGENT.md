@@ -1,5 +1,7 @@
 # 05. Edge Agent 设计
 
+本轮已实现的能力与恢复行为见 [Phase 2 指南](PHASE2_QUICKSTART.md)；Artifact 及手机适配器仍按后续阶段交付。
+
 ## 5.1 产品定义
 
 Edge Agent 是安装在 PC、服务器、Linux SBC 或后续 Android 设备上的常驻执行节点。它不是另一个聊天 Agent，而是 DSH Agent 可调用的“设备身体”：负责发现本机能力、接收任务、调用工具、保存状态并返回结果。
@@ -81,9 +83,9 @@ Worker 接受任务后，即使 Coordinator 或手机暂时离线，也继续已
 
 ### 进程身份、落盘日志与重启恢复
 
-local_task_ledger 在启动子进程时必须持久化 `(pid, process_start_time_ns, os_boot_id, stdout_path, stderr_path)`，另存 pgid 或 job_name、stdout_offset、stderr_offset、exit_status_path 与启动阶段。process_start_time_ns 是 OS 原生创建时间归一化到纳秒的身份值，保留原始精度，不使用 Agent 的当前时间猜测。Linux 来自 /proc/<pid>/stat 的 starttime（启动后 ticks 换算），os_boot_id 来自 /proc/sys/kernel/random/boot_id；Windows 使用 GetProcessTimes 创建时间（转为 Unix epoch 纳秒）和 Win32_OperatingSystem.LastBootUpTime 归一化 UTC 值作为 os_boot_id，跨 Agent 重启稳定、跨 OS 重启变化，不能用 Agent 随机 UUID。
+local_task_ledger 在启动子进程时必须持久化 `(pid, process_start_time_ns, os_boot_id, stdout_path, stderr_path)`，另存 pgid 或 job_name、stdout_offset、stderr_offset、exit_status_path 与启动阶段。process_start_time_ns 是 OS 原生创建时间归一化到纳秒的身份值，保留原始精度，不使用 Agent 的当前时间猜测。Linux 来自 /proc/<pid>/stat 的 starttime（启动后 ticks 换算），os_boot_id 来自 /proc/sys/kernel/random/boot_id；Windows 使用 GetProcessTimes 创建时间（转为 Unix epoch 纳秒）与 NtQuerySystemInformation 的启动 GUID（失败时回退系统 BootTime）作为 os_boot_id，跨 Agent 重启稳定、跨 OS 重启变化，不能用 Agent 随机 UUID。
 
-stdout/stderr 由子进程直接以追加方式写 `<agent_data_dir>/runs/<task_id>/stdout.log` 与 stderr.log，不依赖 Agent 存活的匿名管道。tail 协程按字节偏移封装 task.log / task.progress；偏移推进与 outbox 写入同一事务，事件携带 stream、offset、length，防止崩溃后漏日志。
+stdout/stderr 由子进程直接以追加方式写 `<agent_data_dir>/runs/<sha256(task_id)>/stdout.log` 与 stderr.log，不依赖 Agent 存活的匿名管道。tail 协程按字节偏移封装 task.log / task.progress；偏移推进与 outbox 写入同一事务，事件携带 stream、offset、length，防止崩溃后漏日志。
 
 启动使用独立 task runner：先持久化 launching 记录，再由 runner 持久化受管进程身份、执行用户程序并原子写退出状态文件。runner 不依附 Agent 连接和退出生命周期，避免 Agent 在启动与 ledger 更新间崩溃后重复执行。无法确认该窗口是否执行时，先对账 runner，禁止自动重启用户命令。
 
@@ -91,7 +93,7 @@ Agent 重启先比对 (pid, process_start_time_ns, os_boot_id)，并验证受管
 
 ### 跨平台进程树清理
 
-- Linux x86_64 / ARM64：使用 SysProcAttr{Setpgid: true} 创建独立进程组，记录 pgid；受管 runner 保持组长存活到其用户进程树收敛，防止父程序先退而失去取消身份锚点。取消或超时先向 -pgid 发 SIGTERM，默认宽限 5 秒，再向仍属于本任务的进程组发 SIGKILL；清理前重新验证身份，防止 PID/PGID 复用。不支持自行 setsid 逃离受管组的守护化程序作为 V1 process.exec。
+- Linux x86_64 / ARM64：使用 SysProcAttr{Setpgid: true} 创建独立进程组，记录 pgid；受管 runner 保持组长存活到其用户进程树收敛，防止父程序先退而失去取消身份锚点。取消或超时先向 -pgid 发 SIGTERM，默认宽限 500ms（可配置），再向仍属于本任务的进程组发 SIGKILL；清理前重新验证身份，防止 PID/PGID 复用。不支持自行 setsid 逃离受管组的守护化程序作为 V1 process.exec。
 - Windows：CreateJobObject 创建每任务命名 Job；用户进程以挂起方式创建，AssignProcessToJobObject 成功后才恢复，禁止 breakaway。取消或超时用 TerminateJobObject 清理整棵受管进程树。独立 runner 保持 Job 句柄并写退出状态；Agent 重启重新打开同名 Job，避免 Agent 关闭最后句柄时触发 KILL_ON_JOB_CLOSE 而破坏任务存续。不能入 Job 的任务明确失败，不退化为只杀父 PID。
 - 取消先落持久化请求，再清理；确认组/Job 内进程退出并关闭文件句柄后才记录 cancelled。deadline 超时对应 failed / DEADLINE_EXCEEDED。已成功终态不被迟到取消覆盖。
 

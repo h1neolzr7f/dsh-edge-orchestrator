@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol"
 	_ "modernc.org/sqlite"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -150,7 +152,7 @@ func (a *Agent) finish(t protocol.TaskEnvelope, result json.RawMessage, runErr e
 		if !errors.As(runErr, &pe) {
 			pe = &protocol.Error{Code: "EXECUTION_FAILED", Message: runErr.Error()}
 		}
-		payload = protocol.EventPayload{Error: pe}
+		payload = protocol.EventPayload{Error: pe, Result: result}
 	}
 	if cancelled {
 		kind, next = "task.cancelled", "cancelled"
@@ -161,10 +163,10 @@ func (a *Agent) finish(t protocol.TaskEnvelope, result json.RawMessage, runErr e
 	}
 	return tx.Commit()
 }
-func (a *Agent) outbox() ([]protocol.TaskEvent, error) {
+func (a *Agent) outbox(afterSeq int64) ([]protocol.TaskEvent, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	rows, e := a.db.Query(`SELECT payload FROM event_outbox ORDER BY worker_seq LIMIT 100`)
+	rows, e := a.db.Query(`SELECT payload FROM event_outbox WHERE worker_seq > ? ORDER BY worker_seq LIMIT 100`, afterSeq)
 	if e != nil {
 		return nil, e
 	}
@@ -250,6 +252,13 @@ func (a *Agent) recoverTasks() ([]protocol.TaskEnvelope, error) {
 		return nil, e
 	}
 	for _, t := range running {
+		if t.Capability.ID == "process.exec" && a.canResumeProcess(t) {
+			a.mu.Lock()
+			a.resuming[t.TaskID] = true
+			a.mu.Unlock()
+			accepted = append(accepted, t)
+			continue
+		}
 		if e = a.finish(t, nil, protocol.Err("interrupted_by_restart", "accepted task is never automatically re-executed"), false); e != nil {
 			return nil, e
 		}
@@ -289,6 +298,18 @@ func (a *Agent) cancelTask(id string) error {
 		return e
 	}
 	a.cancelled[id] = true
+	if raw != "" && !protocol.Terminal(status) {
+		var task protocol.TaskEnvelope
+		if json.Unmarshal([]byte(raw), &task) == nil && task.Capability.ID == "process.exec" {
+			dir := a.taskDir(id)
+			if e = os.MkdirAll(dir, 0700); e != nil {
+				return e
+			}
+			if e = os.WriteFile(filepath.Join(dir, "cancel"), []byte("cancel"), 0600); e != nil {
+				return e
+			}
+		}
+	}
 	if cancel := a.active[id]; cancel != nil {
 		cancel()
 	}

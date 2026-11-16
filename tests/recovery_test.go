@@ -216,3 +216,92 @@ func TestCancelAfterLostSubmitDoesNotStartWork(t *testing.T) {
 		t.Fatalf("cancelled task ran: %d %v", n, e)
 	}
 }
+func rawRunningWorker(t *testing.T) (*coordinator.Server, *edgelink.Conn, context.Context) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	s, e := coordinator.Open(coordinator.Config{DBPath: filepath.Join(t.TempDir(), "c.db"), ControllerToken: "c", WorkerTokens: map[string]string{"w": "secret"}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { s.Close() })
+	ts := httptest.NewTLSServer(s.Handler())
+	t.Cleanup(ts.Close)
+	a, e := agent.Open(agent.Config{DBPath: filepath.Join(t.TempDir(), "a.db"), DeviceID: "w", Token: "secret", CoordinatorURL: ts.URL, HTTPClient: ts.Client()})
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { a.Close() })
+	raw, e := edgelink.Dial(ctx, ts.URL+"/v1/link", "secret", ts.Client())
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(raw.Close)
+	raw.Send(ctx, "client.hello", "w", protocol.ClientHello{Role: "worker", DeviceID: "w", AgentVersion: "0.1.0", ProtocolVersions: []string{protocol.Version}, PendingMessageIDs: []string{}})
+	if _, e = raw.Receive(ctx); e != nil {
+		t.Fatal(e)
+	}
+	raw.Send(ctx, "device.register", "w", a.Registration())
+	if _, e = raw.Receive(ctx); e != nil {
+		t.Fatal(e)
+	}
+	raw.Send(ctx, "link.ready", "w", map[string]bool{})
+	p := protocol.PlanEnvelope{PlanID: "p", IdempotencyKey: "p:1", Goal: "hold", ConcurrencyLimit: 1, CreatedAt: time.Now().UTC(), Tasks: []protocol.TaskEnvelope{{TaskID: "t", TargetDeviceID: "w", Capability: protocol.CapabilityRef{ID: "device.inspect", Version: "1.x"}, DependsOn: []string{}, Input: json.RawMessage(`{}`)}}}
+	if _, e = s.Submit(p); e != nil {
+		t.Fatal(e)
+	}
+	m, e := raw.Receive(ctx)
+	if e != nil || m.Kind != "task.submit" {
+		t.Fatalf("submit missing %s %v", m.Kind, e)
+	}
+	return s, raw, ctx
+}
+func TestRunningTaskDoesNotRetransmitSubmit(t *testing.T) {
+	s, raw, ctx := rawRunningWorker(t)
+	raw.Send(ctx, "task.accepted", "t", protocol.TaskReceipt{TaskID: "t", DeviceID: "w", Status: "accepted", AcceptedAt: time.Now().UTC()})
+	raw.Send(ctx, "event.append", "t", protocol.TaskEvent{EventID: "evt_start", PlanID: "p", TaskID: "t", DeviceID: "w", WorkerSeq: 1, TaskSeq: 1, Type: "task.started", Timestamp: time.Now().UTC(), Payload: json.RawMessage(`{}`)})
+	await(t, ctx, func() bool { p, e := s.Plan("p"); return e == nil && p.Tasks[0].Status == "running" })
+	frames := make(chan string, 20)
+	go func() {
+		for {
+			m, e := raw.Receive(ctx)
+			if e != nil {
+				return
+			}
+			frames <- m.Kind
+		}
+	}()
+	timer := time.NewTimer(1200 * time.Millisecond)
+	defer timer.Stop()
+	for {
+		select {
+		case kind := <-frames:
+			if kind == "task.submit" {
+				t.Fatal("running task received repeated submit")
+			}
+		case <-timer.C:
+			return
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+}
+func TestAcceptedReceiptProducesPlanEvent(t *testing.T) {
+	s, raw, ctx := rawRunningWorker(t)
+	before, e := s.Events(0, 0, 500)
+	if e != nil {
+		t.Fatal(e)
+	}
+	raw.Send(ctx, "task.accepted", "t", protocol.TaskReceipt{TaskID: "t", DeviceID: "w", Status: "accepted", AcceptedAt: time.Now().UTC()})
+	await(t, ctx, func() bool { p, e := s.Plan("p"); return e == nil && p.Tasks[0].Status == "accepted" })
+	after, e := s.Events(before.HighWatermark, 0, 500)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, ev := range after.Events {
+		if ev.Type == "plan.updated" {
+			return
+		}
+	}
+	t.Fatal("accepted receipt invisible in global event stream")
+}
