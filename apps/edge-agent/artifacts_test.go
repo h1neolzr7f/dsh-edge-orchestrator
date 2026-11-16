@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	coordinator "github.com/h1neolzr7f/dsh-edge-orchestrator/apps/coordinator"
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol"
 	"net/http"
 	"net/http/httptest"
@@ -324,6 +325,86 @@ func TestArtifactClaimBoundaryGuards(t *testing.T) {
 			}
 			if e != nil || snap.Status != want {
 				t.Fatalf("status=%s want=%s %v", snap.Status, want, e)
+			}
+		})
+	}
+}
+
+func TestArtifactUnpreparedProcessOutputsUseAuthorizedCWDMapping(t *testing.T) {
+	for _, defaultMapping := range []bool{false, true} {
+		t.Run(fmt.Sprint(defaultMapping), func(t *testing.T) {
+			root := t.TempDir()
+			other := t.TempDir()
+			roots := map[string]string{"workspace/other": other}
+			if defaultMapping {
+				roots["workspace/project"] = root
+			}
+			s, e := coordinator.Open(coordinator.Config{DBPath: filepath.Join(t.TempDir(), "c.db"), ControllerToken: "controller", WorkerTokens: map[string]string{"w": "worker"}})
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer s.Close()
+			ts := httptest.NewTLSServer(s.Handler())
+			defer ts.Close()
+			a, e := Open(Config{DBPath: filepath.Join(t.TempDir(), "a.db"), DeviceID: "w", Token: "controller", CoordinatorURL: ts.URL, HTTPClient: ts.Client(), Workspaces: roots})
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer a.Close()
+			dir := filepath.Join(other, "sub", "deep")
+			if e = os.MkdirAll(dir, 0700); e != nil {
+				t.Fatal(e)
+			}
+			path := filepath.Join(dir, "output")
+			f, e := os.Create(path)
+			if e != nil {
+				t.Fatal(e)
+			}
+			cmd := exec.Command("git", "--version")
+			cmd.Dir = dir
+			cmd.Stdout = f
+			e = cmd.Run()
+			f.Close()
+			if e != nil {
+				t.Fatal(e)
+			}
+			task := artifactTask("output_mapping", strings.Repeat("0", 64))
+			task.InputArtifacts = nil
+			task.Capability.ID = "process.exec"
+			task.Input = json.RawMessage(`{"program":"git","args":["--version"],"cwd":"workspace/other/sub/deep"}`)
+			task.OutputArtifacts = []protocol.OutputArtifact{{Path: "output", Name: "output", MediaType: "text/plain"}}
+			ctx, e := a.prepareTask(context.Background(), task)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if ctx.Value(workspaceKey{}) != nil {
+				t.Fatal("test accidentally prepared workspace")
+			}
+			if e = a.uploadOutputs(ctx, task); e != nil {
+				t.Fatalf("authorized nondefault cwd upload: %v", e)
+			}
+			client := a.artifactClient()
+			u, e := client.CreateArtifactUpload(ctx, protocol.ArtifactUploadRequest{PlanID: task.PlanID, TaskID: task.TaskID, Name: "output", MediaType: "text/plain", SizeBytes: 0, SHA256: strings.Repeat("0", 64)})
+			_ = u
+			if e == nil {
+				t.Fatal("mismatched content unexpectedly reused upload")
+			}
+			b, e := os.ReadFile(path)
+			if e != nil {
+				t.Fatal(e)
+			}
+			h := sha256.Sum256(b)
+			u, e = client.CreateArtifactUpload(ctx, protocol.ArtifactUploadRequest{PlanID: task.PlanID, TaskID: task.TaskID, Name: "output", MediaType: "text/plain", SizeBytes: int64(len(b)), SHA256: hex.EncodeToString(h[:])})
+			if e != nil {
+				t.Fatal(e)
+			}
+			dest := filepath.Join(t.TempDir(), "result")
+			if e = client.DownloadArtifactFile(ctx, u.ArtifactID, dest, hex.EncodeToString(h[:])); e != nil {
+				t.Fatal(e)
+			}
+			downloaded, e := os.ReadFile(dest)
+			if e != nil || string(downloaded) != string(b) {
+				t.Fatalf("uploaded bytes=%q %v", downloaded, e)
 			}
 		})
 	}

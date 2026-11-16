@@ -75,11 +75,7 @@ func (a *Agent) uploadOutputs(ctx context.Context, t protocol.TaskEnvelope) erro
 		if !protocol.SafePath(out.Path) || out.Name == "" || out.MediaType == "" {
 			return protocol.Err("ARTIFACT_UPLOAD_FAILED", "invalid output declaration")
 		}
-		base, e := a.taskRoot(ctx, "")
-		if e != nil {
-			return protocol.Err("ARTIFACT_UPLOAD_FAILED", e.Error())
-		}
-		root := base
+		var base, root string
 		if t.Capability.ID == "process.exec" {
 			var in struct {
 				CWD string `json:"cwd"`
@@ -87,7 +83,10 @@ func (a *Agent) uploadOutputs(ctx context.Context, t protocol.TaskEnvelope) erro
 			if err := json.Unmarshal(t.Input, &in); err != nil {
 				return err
 			}
-			root, e = a.processDir(ctx, in.CWD)
+			base, root, e = a.processPaths(ctx, in.CWD)
+		} else {
+			base, e = a.taskRoot(ctx, "")
+			root = base
 		}
 		if e != nil {
 			return protocol.Err("ARTIFACT_UPLOAD_FAILED", e.Error())

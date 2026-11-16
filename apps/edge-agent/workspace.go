@@ -149,6 +149,13 @@ func (a *Agent) taskRoot(ctx context.Context, logical string) (string, error) {
 	return a.taskPath(ctx, logical, ".")
 }
 func (a *Agent) processDir(ctx context.Context, cwd string) (string, error) {
+	_, dir, e := a.processPaths(ctx, cwd)
+	return dir, e
+}
+
+// Resolve the authorized directory anchor and execution cwd through one mapping
+// selection, including unprepared processes with nondefault workspaces.
+func (a *Agent) processPaths(ctx context.Context, cwd string) (string, string, error) {
 	if cwd == "" {
 		cwd = "workspace/project"
 	}
@@ -159,10 +166,15 @@ func (a *Agent) processDir(ctx context.Context, cwd string) (string, error) {
 	sort.Slice(keys, func(i, j int) bool { return len(keys[i]) > len(keys[j]) })
 	for _, key := range keys {
 		if cwd == key || strings.HasPrefix(cwd, key+"/") {
-			return a.taskPath(ctx, key, strings.TrimPrefix(strings.TrimPrefix(cwd, key), "/"))
+			base, e := a.taskPath(ctx, key, ".")
+			if e != nil {
+				return "", "", e
+			}
+			dir, e := a.taskPath(ctx, key, strings.TrimPrefix(strings.TrimPrefix(cwd, key), "/"))
+			return base, dir, e
 		}
 	}
-	return "", protocol.Err("PATH_OUTSIDE_WORKSPACE", "cwd is not a mapped workspace")
+	return "", "", protocol.Err("PATH_OUTSIDE_WORKSPACE", "cwd is not a mapped workspace")
 }
 func (a *Agent) taskDir(id string) string {
 	h := sha256.Sum256([]byte(id))

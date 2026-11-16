@@ -16,23 +16,32 @@ func syncArtifactDir(path string) error {
 }
 
 // Persist new ancestor names as well as the artifact directory itself.
-func durableArtifactDir(path string) error {
+func durableArtifactDir(path string) error { return durableArtifactDirWithSync(path, syncArtifactDir) }
+func durableArtifactDirWithSync(path string, syncDir func(string) error) error {
+	exists := false
 	if st, e := os.Stat(path); e == nil {
 		if !st.IsDir() {
 			return &os.PathError{Op: "mkdir", Path: path, Err: os.ErrExist}
 		}
-		return nil
+		exists = true
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
 	parent := filepath.Dir(path)
-	if e := durableArtifactDir(parent); e != nil {
+	if parent == path {
+		return nil
+	} // Filesystem root has no parent name to publish.
+	// Existing names may come from a concurrent mkdir or a prior failed fsync.
+	// Re-establish every ancestor barrier instead of treating visibility as durability.
+	if e := durableArtifactDirWithSync(parent, syncDir); e != nil {
 		return e
 	}
-	if e := os.Mkdir(path, 0700); e != nil && !errors.Is(e, os.ErrExist) {
-		return e
+	if !exists {
+		if e := os.Mkdir(path, 0700); e != nil && !errors.Is(e, os.ErrExist) {
+			return e
+		}
 	}
-	return syncArtifactDir(parent)
+	return syncDir(parent)
 }
 
 func durableArtifactMove(src, dst string) error {
