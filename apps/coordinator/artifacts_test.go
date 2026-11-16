@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	edgelink "github.com/h1neolzr7f/dsh-edge-orchestrator/packages/edge-link"
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol"
 	"net/http/httptest"
@@ -198,5 +199,57 @@ func TestArtifactProvenanceDoesNotLeakIntoPlan(t *testing.T) {
 	var status string
 	if e = s.db.QueryRow(`SELECT status FROM tasks WHERE id='downstream'`).Scan(&status); e != nil || status != "rejected" {
 		t.Fatalf("foreign symbolic binding status=%s %v", status, e)
+	}
+}
+
+// Publication includes the file flush and platform namespace durability barrier.
+// An error at either publication point must precede any SQLite acknowledgment.
+func TestArtifactPublicationFailureDoesNotAdvanceSQLite(t *testing.T) {
+	for _, phase := range []string{"staging", "ready"} {
+		t.Run(phase, func(t *testing.T) {
+			s := setup(t)
+			s.artifactPublish = func(src, dst string) error {
+				if (phase == "staging" && strings.HasSuffix(dst, ".part")) || (phase == "ready" && strings.HasSuffix(dst, ".ready")) {
+					return fmt.Errorf("injected directory durability failure")
+				}
+				return os.Rename(src, dst)
+			}
+			ts := httptest.NewTLSServer(s.Handler())
+			defer ts.Close()
+			c := edgelink.NewClient(ts.URL, "controller", ts.Client())
+			ctx := context.Background()
+			h := sha256.Sum256([]byte("ready"))
+			u, e := c.CreateArtifactUpload(ctx, protocol.ArtifactUploadRequest{PlanID: "future", TaskID: "durability", Name: "file", MediaType: "text/plain", SizeBytes: 5, SHA256: hex.EncodeToString(h[:])})
+			if phase == "staging" {
+				if e == nil {
+					t.Error("staging durability failure acknowledged")
+				}
+				var n int
+				s.db.QueryRow(`SELECT COUNT(*) FROM artifact_uploads`).Scan(&n)
+				if n != 0 {
+					t.Error("upload row persisted before staging name")
+				}
+				return
+			}
+			if e != nil {
+				t.Fatal(e)
+			}
+			if _, e = c.UploadArtifactChunk(ctx, u.UploadID, 0, []byte("ready")); e != nil {
+				t.Fatal(e)
+			}
+			if _, e = c.CompleteArtifactUpload(ctx, u.UploadID); e == nil {
+				t.Error("ready durability failure acknowledged")
+			}
+			var n int
+			s.db.QueryRow(`SELECT COUNT(*) FROM artifacts`).Scan(&n)
+			if n != 0 {
+				t.Error("artifact row persisted before ready name")
+			}
+			var complete bool
+			s.db.QueryRow(`SELECT completed FROM artifact_uploads WHERE upload_id=?`, u.UploadID).Scan(&complete)
+			if complete {
+				t.Error("completion persisted before ready name")
+			}
+		})
 	}
 }

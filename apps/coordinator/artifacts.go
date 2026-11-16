@@ -90,21 +90,29 @@ func (s *Server) artifactsHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		u = artifactUpload{UploadID: protocol.NewID("up"), ArtifactID: protocol.NewID("art"), ChunkSize: 4 << 20, Plan: in.PlanID, Task: in.TaskID, Device: device, Name: in.Name, Media: in.MediaType, Hash: in.SHA256, Size: in.SizeBytes}
 		dir := s.artifactDir
-		if e = os.MkdirAll(dir, 0700); e != nil {
+		if e = durableArtifactDir(dir); e != nil {
 			fail(e)
 			return
 		}
 		u.Path = filepath.Join(dir, u.ArtifactID+".part")
-		f, e := os.OpenFile(u.Path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		f, e := os.OpenFile(u.Path+".new", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if e != nil {
 			fail(e)
 			return
 		}
-		e = f.Close()
+		e = f.Sync()
+		ce := f.Close()
+		if e == nil {
+			e = ce
+		}
+		if e == nil {
+			e = s.publishArtifactName(u.Path+".new", u.Path)
+		}
 		if e == nil {
 			_, e = s.db.Exec(`INSERT INTO artifact_uploads(upload_id,artifact_id,plan_id,task_id,device_id,name,media_type,total_size,expected_sha256,chunk_size,temp_path) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, u.UploadID, u.ArtifactID, u.Plan, u.Task, u.Device, u.Name, u.Media, u.Size, u.Hash, u.ChunkSize, u.Path)
 		}
 		if e != nil {
+			os.Remove(u.Path + ".new")
 			os.Remove(u.Path)
 			fail(e)
 			return

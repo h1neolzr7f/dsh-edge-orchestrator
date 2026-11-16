@@ -92,10 +92,18 @@ func (s *Server) completeArtifact(u artifactUpload) (protocol.ArtifactRef, error
 	if n != u.Size || hex.EncodeToString(h.Sum(nil)) != u.Hash {
 		return ref, protocol.Err("ARTIFACT_HASH_MISMATCH", "artifact hash differs")
 	}
-	if _, e = os.Stat(u.Path); e == nil {
-		if e = os.Rename(u.Path, ready); e != nil {
+	if _, e = os.Stat(u.Path); errors.Is(e, os.ErrNotExist) {
+		// A previous process may have renamed before committing SQLite. Put the
+		// verified file back under its staging name durably, then publish again.
+		// Either name remains recoverable if this retry is itself interrupted.
+		if e = s.publishArtifactName(ready, u.Path); e != nil {
 			return ref, e
 		}
+	} else if e != nil {
+		return ref, e
+	}
+	if e = s.publishArtifactName(u.Path, ready); e != nil {
+		return ref, e
 	}
 	tx, e := s.db.Begin()
 	if e != nil {
@@ -145,4 +153,11 @@ func (s *Server) lockArtifact(key string) func() {
 		}
 		s.artifactMu.Unlock()
 	}
+}
+
+func (s *Server) publishArtifactName(src, dst string) error {
+	if s.artifactPublish != nil {
+		return s.artifactPublish(src, dst)
+	}
+	return durableArtifactMove(src, dst)
 }
