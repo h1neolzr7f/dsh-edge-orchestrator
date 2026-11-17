@@ -22,6 +22,7 @@ import (
 type Executor func(context.Context, protocol.TaskEnvelope) (json.RawMessage, error)
 type Config struct {
 	DBPath, DeviceID, Token, CoordinatorURL string
+	PairingCode                             string
 	Workspaces                              map[string]string
 	AllowedPrograms                         []string
 	TerminationGrace                        time.Duration
@@ -48,13 +49,16 @@ type Agent struct {
 }
 
 func Open(cfg Config) (*Agent, error) {
-	if cfg.DBPath == "" || !protocol.ValidID(cfg.DeviceID) || cfg.Token == "" || cfg.CoordinatorURL == "" {
+	if cfg.DBPath == "" || cfg.CoordinatorURL == "" {
 		return nil, fmt.Errorf("database, device ID, token and coordinator URL required")
 	}
 	if cfg.DBPath != ":memory:" {
 		if e := os.MkdirAll(filepath.Dir(cfg.DBPath), 0700); e != nil {
 			return nil, e
 		}
+	}
+	if e := secureIdentityFiles(cfg.DBPath); e != nil {
+		return nil, e
 	}
 	dataDir, programs, e := configureLocal(&cfg)
 	if e != nil {
@@ -73,14 +77,7 @@ func Open(cfg Config) (*Agent, error) {
 		db.Close()
 		return nil, e
 	}
-	var id string
-	e = db.QueryRow(`SELECT id FROM identity LIMIT 1`).Scan(&id)
-	if errors.Is(e, sql.ErrNoRows) {
-		_, e = db.Exec(`INSERT INTO identity(id) VALUES(?)`, cfg.DeviceID)
-	} else if e == nil && id != cfg.DeviceID {
-		e = fmt.Errorf("database belongs to device %s", id)
-	}
-	if e != nil {
+	if e = loadIdentity(db, &cfg); e != nil {
 		db.Close()
 		return nil, e
 	}
@@ -114,6 +111,15 @@ func Open(cfg Config) (*Agent, error) {
 	}
 	return a, nil
 }
+
+// Every parent-root cancellation shares the marker/terminal commit mutex.
+// Task cancellation remains a separate durable fact in cancelTask.
+func (a *Agent) stopRoot() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.cancel()
+}
+
 func (a *Agent) Close() error {
 	var e error
 	a.closeOnce.Do(func() {
@@ -150,8 +156,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.runWG.Add(1)
 	a.mu.Unlock()
 	defer a.runWG.Done()
-	defer a.cancel()
-	stop := context.AfterFunc(ctx, a.cancel)
+	defer a.stopRoot()
+	stop := context.AfterFunc(ctx, a.stopRoot)
 	defer stop()
 	accepted, e := a.recoverTasks()
 	if e != nil {
@@ -191,7 +197,7 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 func (a *Agent) Registration() protocol.DeviceRegistration {
 	caps := []protocol.CapabilityManifest{}
-	for _, id := range []string{"device.inspect", "report.aggregate", "process.exec", "process.cancel", "filesystem.read", "filesystem.write", "git.inspect"} {
+	for _, id := range []string{"device.inspect", "report.aggregate", "process.exec", "process.cancel", "filesystem.read", "filesystem.write", "git.inspect", "artifact.upload"} {
 		caps = append(caps, protocol.CapabilityManifest{CapabilityID: id, Version: "1.0.0", Description: "Authorized local capability", InputSchema: json.RawMessage(capabilitySchemas()[id]), OutputSchema: json.RawMessage(`{"type":"object"}`), PermissionScope: id, ResourceClass: "cpu", MaxConcurrency: 4, Discovery: "static", Authorized: true})
 	}
 	return protocol.DeviceRegistration{Manifest: protocol.DeviceManifest{DeviceID: a.cfg.DeviceID, DisplayName: a.cfg.DeviceID, Platform: protocol.Platform{OS: runtime.GOOS, Arch: runtime.GOARCH, Version: hostVersion()}, AgentVersion: "0.2.0", Labels: []string{}, Resources: hostResources(filepath.Dir(a.cfg.DBPath)), CapabilitiesRevision: 2}, Capabilities: caps}
@@ -407,15 +413,18 @@ func (a *Agent) launch(t protocol.TaskEnvelope) {
 		defer a.wg.Done()
 		defer cancel()
 		defer func() { a.mu.Lock(); delete(a.resuming, t.TaskID); delete(a.active, t.TaskID); a.mu.Unlock() }()
-		claimed, e := a.claim(t)
+		// Receipt remains accepted throughout resumable preflight. A late
+		// duplicate must not rebuild a completed or running task checkout.
+		a.mu.Lock()
+		resuming := a.resuming[t.TaskID]
+		var status string
+		e := a.db.QueryRow(`SELECT status FROM local_task_ledger WHERE id=?`, t.TaskID).Scan(&status)
+		a.mu.Unlock()
 		if e != nil {
 			a.setError(e)
 			return
 		}
-		a.mu.Lock()
-		resuming := a.resuming[t.TaskID]
-		a.mu.Unlock()
-		if !claimed && !resuming {
+		if status != "accepted" && !resuming {
 			return
 		}
 		var result json.RawMessage
@@ -424,10 +433,24 @@ func (a *Agent) launch(t protocol.TaskEnvelope) {
 		if !resuming {
 			prepared, prepErr = a.prepareTask(ctx, t)
 		}
+		if resuming {
+			prepared = a.workspaceForResume(ctx, t)
+		}
+		if prepErr == nil && !resuming {
+			claimed, err := a.claim(t)
+			if err != nil {
+				a.setError(err)
+				return
+			}
+			if !claimed {
+				if err = a.cleanupTaskWorkspace(t); err != nil {
+					a.setError(err)
+				}
+				return
+			}
+		}
 		if prepErr != nil {
 			runErr = prepErr
-		} else if len(t.InputArtifacts) > 0 || len(t.InputArtifactBindings) > 0 {
-			runErr = protocol.Err("UNSUPPORTED_PRECONDITION", "workspace/artifact executors not installed")
 		} else if !supports(t) {
 			runErr = protocol.Err("UNSUPPORTED_CAPABILITY", t.Capability.ID)
 		} else if ctx.Err() != nil && !resuming {
@@ -437,6 +460,12 @@ func (a *Agent) launch(t protocol.TaskEnvelope) {
 		} else {
 			result, runErr = a.execute(prepared, t)
 		}
+		if runErr == nil {
+			runErr = a.uploadOutputs(prepared, t)
+		}
+		if a.ctx.Err() != nil && prepErr != nil {
+			return
+		} // Accepted preflight retries after restart.
 		if errors.Is(runErr, errAgentDetached) {
 			return
 		}
@@ -453,6 +482,15 @@ func (a *Agent) launch(t protocol.TaskEnvelope) {
 			runErr = protocol.Err("interrupted_by_restart", "agent stopped before durable completion")
 		}
 		if e = a.finish(t, result, runErr, cancelled); e != nil {
+			if errors.Is(e, errAgentDetached) {
+				return
+			}
+			a.setError(e)
+			return
+		}
+		// Process logs are drained and all required outputs have uploaded before
+		// this durable-terminal cleanup boundary.
+		if e = a.cleanupTaskWorkspace(t); e != nil {
 			a.setError(e)
 		}
 	}()
@@ -474,6 +512,8 @@ func (a *Agent) execute(ctx context.Context, t protocol.TaskEnvelope) (json.RawM
 		}
 	}
 	switch t.Capability.ID {
+	case "artifact.upload":
+		return a.executeArtifactUpload(ctx, t)
 	case "device.inspect":
 		b, e := json.Marshal(a.Registration().Manifest)
 		return b, e

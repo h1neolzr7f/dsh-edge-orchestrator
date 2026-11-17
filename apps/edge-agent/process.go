@@ -28,10 +28,11 @@ func (a *Agent) runProcess(ctx context.Context, t protocol.TaskEnvelope) (json.R
 		}
 	} else {
 		var in struct {
-			Program   string   `json:"program"`
-			Args      []string `json:"args"`
-			CWD       string   `json:"cwd"`
-			TimeoutMS int64    `json:"timeout_ms"`
+			Program   string                    `json:"program"`
+			Args      []string                  `json:"args"`
+			CWD       string                    `json:"cwd"`
+			TimeoutMS int64                     `json:"timeout_ms"`
+			Outputs   []protocol.OutputArtifact `json:"output_artifacts,omitempty"`
 		}
 		if e := protocol.Decode(t.Input, &in); e != nil {
 			return nil, e
@@ -132,15 +133,24 @@ func (a *Agent) runProcess(ctx context.Context, t protocol.TaskEnvelope) (json.R
 			return nil, e
 		}
 	}
+	return a.monitorProcess(ctx, t, spec, ready, a.tailLogs)
+}
+
+// The log reader is supplied so monitoring can be coordinated with slow local
+// I/O without coupling runner ownership to the scheduler or transport.
+func (a *Agent) monitorProcess(ctx context.Context, t protocol.TaskEnvelope, spec runnerSpec, ready runnerReady, tail func(protocol.TaskEnvelope, string, ...bool) error) (json.RawMessage, error) {
+	dir := spec.Dir
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	terminating := false
 	for {
-		if a.ctx.Err() != nil {
+		if a.processDetached(t) {
 			return nil, errAgentDetached
 		}
-		if e := a.tailLogs(t, dir); e != nil {
-			os.WriteFile(filepath.Join(dir, "cancel"), []byte("cancel"), 0600)
+		if e := tail(t, dir); e != nil {
+			if stopErr := a.markProcessCancellation(t, dir); errors.Is(stopErr, errAgentDetached) {
+				return nil, stopErr
+			}
 			terminateOwned(ready.Identity, spec.JobName, time.Duration(spec.GraceMS)*time.Millisecond)
 			return nil, e
 		}
@@ -150,7 +160,7 @@ func (a *Agent) runProcess(ctx context.Context, t protocol.TaskEnvelope) (json.R
 				return nil, protocol.Err("interrupted_by_restart", "exit status identity mismatch")
 			}
 			if !treeBusy(ready.Identity, spec.JobName) && !sameProcess(ready.Identity) {
-				if e := a.tailLogs(t, dir, true); e != nil {
+				if e := tail(t, dir, true); e != nil {
 					return nil, e
 				}
 				if !a.logsDrained(t, dir) {
@@ -160,6 +170,9 @@ func (a *Agent) runProcess(ctx context.Context, t protocol.TaskEnvelope) (json.R
 				if e != nil {
 					return nil, e
 				}
+				if a.processDetached(t) {
+					return nil, errAgentDetached
+				}
 				if e = a.processProgress(t); e != nil {
 					return nil, e
 				}
@@ -168,7 +181,7 @@ func (a *Agent) runProcess(ctx context.Context, t protocol.TaskEnvelope) (json.R
 		}
 		if ctx.Err() != nil && !terminating {
 			terminating = true
-			if e := os.WriteFile(filepath.Join(dir, "cancel"), []byte("cancel"), 0600); e != nil {
+			if e := a.markProcessCancellation(t, dir); e != nil {
 				return nil, e
 			}
 			if e := terminateOwned(ready.Identity, spec.JobName, time.Duration(spec.GraceMS)*time.Millisecond); e != nil {
@@ -195,7 +208,31 @@ func (a *Agent) runProcess(ctx context.Context, t protocol.TaskEnvelope) (json.R
 		select {
 		case <-ticker.C:
 		case <-a.ctx.Done():
-			return nil, errAgentDetached
+			if a.processDetached(t) {
+				return nil, errAgentDetached
+			}
+			// A durable user cancellation still owns tree termination at shutdown.
+			<-ticker.C
 		}
 	}
+}
+
+// Close, durable user cancellation, and marker publication share a.mu. A parent
+// stop that wins this boundary detaches; a committed user cancel still cleans
+// its tree. Never infer user cancellation from the derived context alone.
+func (a *Agent) processDetachedLocked(t protocol.TaskEnvelope) bool {
+	return (a.closed || a.ctx.Err() != nil) && !a.cancelled[t.TaskID]
+}
+func (a *Agent) processDetached(t protocol.TaskEnvelope) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.processDetachedLocked(t)
+}
+func (a *Agent) markProcessCancellation(t protocol.TaskEnvelope, dir string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.processDetachedLocked(t) {
+		return errAgentDetached
+	}
+	return os.WriteFile(filepath.Join(dir, "cancel"), []byte("cancel"), 0600)
 }

@@ -1,0 +1,26 @@
+{
+  "status": "succeeded",
+  "workers": 2,
+  "patch_bytes": 163,
+  "unit_windows": {
+    "a": {
+      "start": 1794837863863,
+      "end": 1794837864731
+    },
+    "b": {
+      "start": 1794837863817,
+      "end": 1794837864686
+    }
+  },
+  "overlap_ms": 823,
+  "summary": "2 real test suites passed; dirty patch applied on both workers\n",
+  "artifact": {
+    "artifact_id": "art_fcc7ccb58090151e02f32fd5074db728",
+    "task_id": "summary",
+    "name": "summary",
+    "media_type": "text/plain",
+    "size_bytes": 63,
+    "sha256": "43a5c5b0a960a8f003aca882e5fd276b862075f09848fa5a2d75eb0c4503b9b4",
+    "download_uri": "/v1/artifacts/art_fcc7ccb58090151e02f32fd5074db728"
+  }
+}

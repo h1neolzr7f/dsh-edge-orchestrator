@@ -1,0 +1,7 @@
+name: edge_link_dart
+description: Verified HTTPS fleet client and atomic chat card projection.
+version: 1.0.0
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+dev_dependencies:
+  test: ^1.25.8

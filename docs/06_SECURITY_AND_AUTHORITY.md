@@ -4,11 +4,11 @@
 
 ## 6.1 设备身份与配对
 
-1. Edge Agent 首次启动生成设备密钥对并持久化。
-2. 用户在 DSH Go 扫描二维码或输入一次性配对码。
-3. Controller 展示设备名称、平台和身份指纹。
-4. 用户确认后，Coordinator 将设备身份绑定到当前用户/Fleet。
-5. 后续连接使用 TLS 和设备身份凭证；短期连接令牌可轮换，长期私钥不离开设备。
+1. Controller 使用 `POST /v1/pairings` 创建一次性配对码，默认十分钟有效，可绑定 device_hint。
+2. Edge Agent 使用 `--pair CODE --id DEVICE_ID` 经 HTTPS 原子兑换；同一码仅可成功一次。
+3. Coordinator 生成高熵随机 bearer worker_token，仅持久化 SHA-256 token_hash，不保存明文设备令牌。
+4. Edge Agent 在本地 SQLite identity 中保存设备 ID、Coordinator endpoint 与令牌；POSIX 数据库及 WAL/SHM 为 0600；Windows 使用专属用户目录并由部署者限制该目录 ACL（chmod 在 Windows 上不提供 POSIX 的用户隔离）。后续启动自动加载，拒绝跨 endpoint 使用保存凭据。
+5. 静态 DSH_WORKER_TOKENS/DSH_WORKER_TOKEN 继续兼容；Coordinator 支持空静态映射的纯配对部署。首次兑换响应丢失且设备尚未登记时，Controller 可用 recover_existing:true + device_hint 签发一次性恢复码（CLI pair-recover）。已经登记的设备禁止替换，以保留 worker_seq 历史；V1 无通用轮换/撤销 API 或设备密钥对生命周期。
 
 V1 不复用 Remote Runtime 的身份生命周期；采用成熟 TLS/密码库，不自行设计密码算法。
 
@@ -35,6 +35,9 @@ V1 不复用 Remote Runtime 的身份生命周期；采用成熟 TLS/密码库�
 授权可撤销。撤销后阻止新任务；已完成任务不受影响。高影响任务按策略停止。
 
 ## 6.4 审批策略
+
+TaskEnvelope.requires_approval 为 true 且依赖就绪时，Coordinator 持久化 pending 审批与 approval.requested 事件；waiting_approval 不占执行并发槽。Controller 使用 GET /v1/approvals 和 POST /v1/approvals/{id}/resolve（decision: approved/denied，reason 可选）决定。批准仅恢复此不可变任务的 queued 状态，拒绝产生 APPROVAL_DENIED 并使下游收敛。重复同一决定幂等，反向决定冲突；取消和 deadline 使待批记录失效，不能通过迟到批准复活任务。
+
 
 常用开发流程可以配置长期授权，例如在指定仓库运行测试。以下动作默认逐次审批：
 - 删除大量文件或覆盖关键目录；

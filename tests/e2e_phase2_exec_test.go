@@ -2,7 +2,9 @@ package tests
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	coordinator "github.com/h1neolzr7f/dsh-edge-orchestrator/apps/coordinator"
@@ -32,6 +34,19 @@ func TestMain(m *testing.M) {
 			fmt.Println("restart-start")
 			time.Sleep(time.Second)
 			fmt.Println("restart-finish")
+		case "artifact-large":
+			if err := os.WriteFile("large.bin", []byte(strings.Repeat("artifact", (10<<20)/8)), 0600); err != nil {
+				os.Exit(11)
+			}
+			fmt.Println("artifact-producer-once")
+		case "artifact-report":
+			b, err := os.ReadFile("README.md")
+			if err != nil || strings.ReplaceAll(string(b), "\r\n", "\n") != "patched fixture\n" {
+				os.Exit(9)
+			}
+			if err = os.WriteFile("junit.xml", []byte("<testsuite tests=\"1\"/>"), 0600); err != nil {
+				os.Exit(10)
+			}
 		case "log":
 			fmt.Println("real-exec-log")
 			time.Sleep(300 * time.Millisecond)
@@ -59,13 +74,14 @@ func TestMain(m *testing.M) {
 }
 
 type phase2Env struct {
-	cfgA agent.Config
-	c    *edgelink.Client
-	s    *coordinator.Server
-	a, b *agent.Agent
-	root string
-	head string
-	ctx  context.Context
+	cfgA        agent.Config
+	c           *edgelink.Client
+	s           *coordinator.Server
+	a, b        *agent.Agent
+	root        string
+	artifactDir string
+	head        string
+	ctx         context.Context
 }
 
 func newPhase2(t *testing.T, budgets ...time.Duration) *phase2Env {
@@ -90,7 +106,8 @@ func newPhase2(t *testing.T, budgets ...time.Duration) *phase2Env {
 	git("add", ".")
 	git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial")
 	head := git("rev-parse", "HEAD")
-	s, e := coordinator.Open(coordinator.Config{DBPath: filepath.Join(t.TempDir(), "c.db"), ControllerToken: "c", WorkerTokens: map[string]string{"worker-a": "a-secret", "worker-b": "b-secret"}})
+	coordinatorDir := t.TempDir()
+	s, e := coordinator.Open(coordinator.Config{DBPath: filepath.Join(coordinatorDir, "c.db"), ControllerToken: "c", WorkerTokens: map[string]string{"worker-a": "a-secret", "worker-b": "b-secret"}})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -113,7 +130,7 @@ func newPhase2(t *testing.T, budgets ...time.Duration) *phase2Env {
 	}
 	c := edgelink.NewClient(ts.URL, "c", ts.Client())
 	await(t, ctx, func() bool { d, e := c.Devices(ctx); return e == nil && len(d) == 2 && d[0].Online && d[1].Online })
-	return &phase2Env{cfgA: configs[0], c: c, s: s, a: workers[0], b: workers[1], root: root, head: head, ctx: ctx}
+	return &phase2Env{cfgA: configs[0], c: c, s: s, a: workers[0], b: workers[1], root: root, artifactDir: filepath.Join(coordinatorDir, "artifacts"), head: head, ctx: ctx}
 }
 func input(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
 func (e *phase2Env) run(t *testing.T, tasks ...protocol.TaskEnvelope) protocol.PlanSnapshot {
@@ -170,8 +187,8 @@ func TestPhase2ParallelTestAndGitDiffWorkflow(t *testing.T) {
 		t.Fatalf("no logs or parallel overlap: starts=%v ends=%v", starts, ends)
 	}
 	// Parallelism is measured over each task's complete running interval,
-	// including required Git preflight. A millisecond Git read can legitimately
-	// finish before the other worker's payload process has finished starting.
+	// after Git preflight. A millisecond Git read can legitimately finish
+	// before the other worker's payload process has finished starting.
 	for _, v := range snap.Tasks {
 		if v.Task.TaskID == b.TaskID {
 			var r struct {
@@ -528,5 +545,46 @@ func TestPhase2GitInspectShowsDirtyDiff(t *testing.T) {
 	json.Unmarshal(result.Tasks[0].Result, &report)
 	if report.HEAD != e.head || !strings.Contains(report.Status, "README.md") || !strings.Contains(report.Diff, "+changed") {
 		t.Fatalf("dirty diff missing %s", result.Tasks[0].Result)
+	}
+}
+
+func TestPhase2WorktreeCleanedUpAfterCompletion(t *testing.T) {
+	e := newPhase2(t)
+	exe, _ := os.Executable()
+	job := task("cleanup_exec", "process.exec", map[string]any{"program": exe, "args": []string{"--phase2-workload", "log"}, "cwd": "workspace/project", "timeout_ms": 5000})
+	job.WorkspaceContext = &protocol.WorkspaceContext{RootDir: "workspace/project", ExpectedGitHead: e.head, Policy: "require_clean_or_match"}
+	snap := e.run(t, job)
+	if snap.Status != "succeeded" {
+		t.Fatalf("task failed: %s", input(snap))
+	}
+	h := sha256.Sum256([]byte(job.TaskID))
+	runDir := filepath.Join(filepath.Dir(e.cfgA.DBPath), "runs", hex.EncodeToString(h[:]))
+	workspace := filepath.Join(runDir, "workspace")
+	// Coordinator completion can race the local post-completion cleanup.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(workspace); os.IsNotExist(err) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("task worktree remains after completion: %s (%v)", workspace, err)
+	}
+	out, err := exec.Command("git", "-C", e.root, "worktree", "list", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatalf("list worktrees: %s %v", out, err)
+	}
+	if strings.Contains(string(out), filepath.ToSlash(workspace)) {
+		t.Fatalf("task worktree metadata remains: %s", out)
+	}
+	for _, name := range []string{"stdout.log", "stderr.log", "exit.json", "spec.json"} {
+		if _, err := os.Stat(filepath.Join(runDir, name)); err != nil {
+			t.Errorf("diagnostic %s lost: %v", name, err)
+		}
+	}
+	log, err := os.ReadFile(filepath.Join(runDir, "stdout.log"))
+	if err != nil || !strings.Contains(string(log), "real-exec-log") {
+		t.Fatalf("drained log lost: %s %v", log, err)
 	}
 }

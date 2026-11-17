@@ -7,6 +7,8 @@ import (
 	"golang.org/x/sys/windows"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -89,10 +91,47 @@ func terminateOwned(id processID, job string, grace time.Duration) error {
 	}
 	h, e := openJob(job)
 	if e != nil {
+		if sameProcess(id) || treeBusy(id, job) {
+			return fmt.Errorf("open owned job: %w", e)
+		}
 		return nil
 	}
 	defer windows.CloseHandle(h)
-	return windows.TerminateJobObject(h, 1)
+	if e = windows.TerminateJobObject(h, 1); e != nil {
+		return e
+	}
+	if grace < 0 {
+		grace = 0
+	}
+	if grace > 500*time.Millisecond {
+		grace = 500 * time.Millisecond
+	}
+	deadline := time.Now().Add(grace)
+	for sameProcess(id) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !sameProcess(id) {
+		return nil
+	}
+	// The payload's job does not include the independent runner. Verify its
+	// creation identity again after opening the termination handle to avoid
+	// killing a PID reused between the liveness check and OpenProcess.
+	runner, e := windows.OpenProcess(windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(id.PID))
+	if e != nil {
+		if !sameProcess(id) {
+			return nil
+		}
+		return e
+	}
+	defer windows.CloseHandle(runner)
+	var created, exited, kernel, user windows.Filetime
+	if e = windows.GetProcessTimes(runner, &created, &exited, &kernel, &user); e != nil {
+		return e
+	}
+	if created.Nanoseconds() != id.StartTimeNS || !sameProcess(id) {
+		return nil
+	}
+	return windows.TerminateProcess(runner, 1)
 }
 func runnerSignals() func() { return func() {} }
 func startManaged(spec runnerSpec, out, stderr *os.File) (*exec.Cmd, func(), error) {
@@ -181,6 +220,35 @@ func openReadRegular(path string) (*os.File, error) {
 			return nil, e
 		}
 		return nil, protocol.Err("FILE_NOT_REGULAR", "only regular files can be read")
+	}
+	return f, nil
+}
+
+// Validate the opened handle's final path, so replacement of a checked path or
+// junction cannot redirect an upload outside its authorized workspace.
+func openConfinedRegular(root, path string) (*os.File, error) {
+	f, e := openReadRegular(path)
+	if e != nil {
+		return nil, e
+	}
+	buf := make([]uint16, 32768)
+	n, e := windows.GetFinalPathNameByHandle(windows.Handle(f.Fd()), &buf[0], uint32(len(buf)), 0)
+	if e != nil || n >= uint32(len(buf)) {
+		f.Close()
+		if e != nil {
+			return nil, e
+		}
+		return nil, fmt.Errorf("artifact final path too long")
+	}
+	final := windows.UTF16ToString(buf[:n])
+	final = strings.TrimPrefix(final, `\\?\`)
+	if strings.HasPrefix(final, `UNC\`) {
+		final = `\\` + strings.TrimPrefix(final, `UNC\`)
+	}
+	rel, e := filepath.Rel(root, final)
+	if e != nil || rel == ".." || strings.HasPrefix(rel, `..\`) || filepath.IsAbs(rel) {
+		f.Close()
+		return nil, protocol.Err("PATH_OUTSIDE_WORKSPACE", "opened artifact escaped workspace")
 	}
 	return f, nil
 }

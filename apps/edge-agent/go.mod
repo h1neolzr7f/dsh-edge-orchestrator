@@ -25,3 +25,7 @@ require (
 replace github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol => ./../../packages/protocol
 
 replace github.com/h1neolzr7f/dsh-edge-orchestrator/packages/edge-link => ./../../packages/edge-link
+
+require github.com/h1neolzr7f/dsh-edge-orchestrator/packages/artifact v0.0.0
+
+replace github.com/h1neolzr7f/dsh-edge-orchestrator/packages/artifact => ../../packages/artifact

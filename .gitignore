@@ -20,3 +20,5 @@ dist/
 *.db-shm
 *.db-wal
 *.pem
+.flutter-plugins
+.flutter-plugins-dependencies

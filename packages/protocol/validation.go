@@ -90,6 +90,13 @@ func (t TaskEnvelope) Validate() error {
 			return Err("INVALID_TASK", "invalid workspace_context")
 		}
 	}
+	outputs := map[string]bool{}
+	for _, a := range t.OutputArtifacts {
+		if !SafePath(a.Path) || a.Name == "" || a.MediaType == "" || outputs[a.Name] {
+			return Err("INVALID_TASK", "invalid output_artifacts")
+		}
+		outputs[a.Name] = true
+	}
 	mounts := map[string]bool{}
 	for _, a := range t.InputArtifacts {
 		if a.ArtifactID == "" || !hexHash.MatchString(a.SHA256) || !SafePath(a.MountPath) || mounts[a.MountPath] {

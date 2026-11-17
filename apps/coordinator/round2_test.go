@@ -33,8 +33,21 @@ func TestOutOfOrderPoisonEventDoesNotRollbackPriorValidEvent(t *testing.T) {
 	var water int64
 	s.db.QueryRow(`SELECT last_worker_seq FROM devices WHERE id='w'`).Scan(&water)
 	snap, err := s.Plan("p")
-	if err != nil || water != 1 || ack != 1 || snap.Tasks[0].Status != "running" {
+	if err != nil || water != 2 || ack != 2 || snap.Tasks[0].Status != "failed" || snap.Tasks[0].Error == nil || snap.Tasks[0].Error.Code != "PROTOCOL_VIOLATION" {
 		t.Fatalf("valid prefix rolled back water=%d ack=%d status=%s err=%v", water, ack, snap.Tasks[0].Status, e)
+	}
+	page, err := s.Events(0, 0, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, ev := range page.Events {
+		if ev.Type == "task.started" && ev.WorkerSeq == 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("valid prefix event rolled back")
 	}
 }
 func TestWorkerEventInboxPayloadCompacted(t *testing.T) {
@@ -78,5 +91,47 @@ func TestQueuedTaskExposesPendingReason(t *testing.T) {
 	json.Unmarshal(b, &fields)
 	if fields["pending_reason"] != "scheduling_paused" {
 		t.Fatalf("missing scheduling reason: %s", b)
+	}
+}
+
+func TestPoisonBufferedEventDoesNotWedgeSubsequentWorkerReconnect(t *testing.T) {
+	s := acceptedPlan(t)
+	p := samplePlan()
+	p.PlanID = "other"
+	p.IdempotencyKey = "other"
+	p.Tasks[0].TaskID = "other_task"
+	if _, err := s.Submit(p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE tasks SET status='accepted' WHERE id='other_task'`); err != nil {
+		t.Fatal(err)
+	}
+	poison := event(2, 99, "task.succeeded")
+	if ack, err := s.AppendEvent("w", poison); err != nil || ack != 0 {
+		t.Fatalf("buffer poison ack=%d err=%v", ack, err)
+	}
+	if ack, err := s.AppendEvent("w", event(1, 1, "task.started")); ack < 1 {
+		t.Fatalf("valid prefix not acknowledged: %d %v", ack, err)
+	}
+	next := event(3, 1, "task.started")
+	next.PlanID = "other"
+	next.TaskID = "other_task"
+	if ack, err := s.AppendEvent("w", next); err != nil || ack != 3 {
+		t.Fatalf("reconnect wedged by historical poison: ack=%d err=%v", ack, err)
+	}
+	if ack, err := s.AppendEvent("w", poison); err != nil || ack != 3 {
+		t.Fatalf("quarantined replay ack=%d err=%v", ack, err)
+	}
+	poison.Payload = json.RawMessage(`{"status":"changed"}`)
+	if _, err := s.AppendEvent("w", poison); err == nil {
+		t.Fatal("quarantine discarded conflict hash")
+	}
+	snap, err := s.Plan("other")
+	if err != nil || snap.Tasks[0].Status != "running" {
+		t.Fatalf("later valid task not applied: %+v %v", snap, err)
+	}
+	var payload string
+	if err := s.db.QueryRow(`SELECT payload FROM worker_event_inbox WHERE device_id='w' AND worker_seq=2`).Scan(&payload); err != nil || payload != "" {
+		t.Fatalf("poison not quarantined: %q %v", payload, err)
 	}
 }

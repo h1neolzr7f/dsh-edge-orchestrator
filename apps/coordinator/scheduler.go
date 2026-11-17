@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"database/sql"
 	"encoding/json"
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/orchestrator"
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol"
@@ -56,6 +57,31 @@ func (s *Server) schedule() error {
 	if e != nil {
 		return e
 	}
+	deviceLoad := map[string]int{}
+	capLoad := map[string]int{}
+	loadRows, e := s.db.Query(`SELECT payload FROM tasks WHERE status IN ('dispatched','accepted','running')`)
+	if e != nil {
+		return e
+	}
+	for loadRows.Next() {
+		var b string
+		if e = loadRows.Scan(&b); e != nil {
+			loadRows.Close()
+			return e
+		}
+		var t protocol.TaskEnvelope
+		if e = json.Unmarshal([]byte(b), &t); e != nil {
+			loadRows.Close()
+			return e
+		}
+		deviceLoad[t.TargetDeviceID]++
+		capLoad[t.TargetDeviceID+":"+t.Capability.ID]++
+	}
+	e = loadRows.Err()
+	loadRows.Close()
+	if e != nil {
+		return e
+	}
 	for _, id := range ids {
 		tx, e := s.db.Begin()
 		if e != nil {
@@ -68,33 +94,8 @@ func (s *Server) schedule() error {
 				return e
 			}
 			active := 0
-			deviceLoad := map[string]int{}
-			capLoad := map[string]int{}
-			loadRows, e := tx.Query(`SELECT payload FROM tasks WHERE status IN ('dispatched','accepted','running','waiting_approval')`)
-			if e != nil {
-				return e
-			}
-			for loadRows.Next() {
-				var b string
-				if e = loadRows.Scan(&b); e != nil {
-					loadRows.Close()
-					return e
-				}
-				var t protocol.TaskEnvelope
-				if e = json.Unmarshal([]byte(b), &t); e != nil {
-					loadRows.Close()
-					return e
-				}
-				deviceLoad[t.TargetDeviceID]++
-				capLoad[t.TargetDeviceID+":"+t.Capability.ID]++
-			}
-			e = loadRows.Err()
-			loadRows.Close()
-			if e != nil {
-				return e
-			}
 			for _, t := range p.Tasks {
-				if !protocol.Terminal(t.Status) && t.Status != "queued" {
+				if !protocol.Terminal(t.Status) && t.Status != "queued" && t.Status != "waiting_approval" {
 					active++
 				}
 			}
@@ -108,7 +109,10 @@ func (s *Server) schedule() error {
 				if protocol.Terminal(snap.Status) {
 					continue
 				}
-				if t.Deadline != nil && !time.Now().Before(*t.Deadline) && snap.Status == "queued" {
+				if t.Deadline != nil && !time.Now().Before(*t.Deadline) && (snap.Status == "queued" || snap.Status == "waiting_approval") {
+					if e = invalidateApproval(tx, t.TaskID, "expired"); e != nil {
+						return e
+					}
 					if _, e = tx.Exec(`UPDATE tasks SET status='failed',error=? WHERE id=?`, encode(&protocol.Error{Code: "DEADLINE_EXCEEDED", Message: "deadline passed before dispatch"}), t.TaskID); e != nil {
 						return e
 					}
@@ -148,6 +152,44 @@ func (s *Server) schedule() error {
 				}
 				if snap.Status != "queued" {
 					continue
+				}
+				if isReady(t, p.Tasks) && t.RequiresApproval {
+					waiting, err := requestApproval(tx, t)
+					if err != nil {
+						return err
+					}
+					if waiting {
+						continue
+					}
+				}
+				if isReady(t, p.Tasks) && len(t.InputArtifactBindings) > 0 {
+					bindingFailed := false
+					for _, b := range t.InputArtifactBindings {
+						var a protocol.InputArtifact
+						a.MountPath = b.MountPath
+						err := tx.QueryRow(`SELECT id,sha256 FROM artifacts WHERE plan_id=? AND task_id=? AND name=?`, id, b.FromTaskID, b.Name).Scan(&a.ArtifactID, &a.SHA256)
+						if err == sql.ErrNoRows {
+							bindingFailed = true
+							break
+						}
+						if err != nil {
+							return err
+						}
+						t.InputArtifacts = append(t.InputArtifacts, a)
+					}
+					if bindingFailed {
+						if _, e = tx.Exec(`UPDATE tasks SET status='rejected',error=? WHERE id=?`, encode(protocol.Err("ARTIFACT_BINDING_FAILED", "required output was not published")), t.TaskID); e != nil {
+							return e
+						}
+						if e = refreshPlan(tx, id); e != nil {
+							return e
+						}
+						continue
+					}
+					t.InputArtifactBindings = nil
+					if _, e = tx.Exec(`UPDATE tasks SET payload=? WHERE id=?`, encode(t), t.TaskID); e != nil {
+						return e
+					}
 				}
 				reason := ""
 				switch {

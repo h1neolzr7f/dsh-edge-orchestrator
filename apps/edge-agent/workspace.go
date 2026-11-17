@@ -149,6 +149,13 @@ func (a *Agent) taskRoot(ctx context.Context, logical string) (string, error) {
 	return a.taskPath(ctx, logical, ".")
 }
 func (a *Agent) processDir(ctx context.Context, cwd string) (string, error) {
+	_, dir, e := a.processPaths(ctx, cwd)
+	return dir, e
+}
+
+// Resolve the authorized directory anchor and execution cwd through one mapping
+// selection, including unprepared processes with nondefault workspaces.
+func (a *Agent) processPaths(ctx context.Context, cwd string) (string, string, error) {
 	if cwd == "" {
 		cwd = "workspace/project"
 	}
@@ -159,10 +166,15 @@ func (a *Agent) processDir(ctx context.Context, cwd string) (string, error) {
 	sort.Slice(keys, func(i, j int) bool { return len(keys[i]) > len(keys[j]) })
 	for _, key := range keys {
 		if cwd == key || strings.HasPrefix(cwd, key+"/") {
-			return a.taskPath(ctx, key, strings.TrimPrefix(strings.TrimPrefix(cwd, key), "/"))
+			base, e := a.taskPath(ctx, key, ".")
+			if e != nil {
+				return "", "", e
+			}
+			dir, e := a.taskPath(ctx, key, strings.TrimPrefix(strings.TrimPrefix(cwd, key), "/"))
+			return base, dir, e
 		}
 	}
-	return "", protocol.Err("PATH_OUTSIDE_WORKSPACE", "cwd is not a mapped workspace")
+	return "", "", protocol.Err("PATH_OUTSIDE_WORKSPACE", "cwd is not a mapped workspace")
 }
 func (a *Agent) taskDir(id string) string {
 	h := sha256.Sum256([]byte(id))
@@ -203,16 +215,32 @@ func gitOutput(ctx context.Context, root string, args ...string) (string, error)
 	return out.String(), nil
 }
 func (a *Agent) prepareTask(ctx context.Context, t protocol.TaskEnvelope) (context.Context, error) {
-	if len(t.InputArtifacts) > 0 || len(t.InputArtifactBindings) > 0 {
-		return ctx, protocol.Err("UNSUPPORTED_PRECONDITION", "artifact transfer is not installed")
+	if len(t.InputArtifactBindings) > 0 {
+		return ctx, protocol.Err("ARTIFACT_BINDING_FAILED", "unresolved artifact bindings")
 	}
 	w := t.WorkspaceContext
 	if w == nil {
-		return ctx, nil
+		if len(t.InputArtifacts) == 0 {
+			return ctx, nil
+		}
+		dir := filepath.Join(a.taskDir(t.TaskID), "workspace")
+		if e := os.RemoveAll(dir); e != nil {
+			return ctx, e
+		}
+		if e := os.MkdirAll(dir, 0700); e != nil {
+			return ctx, e
+		}
+		logical := a.artifactWorkspace(t)
+		if _, err := a.resolveWorkspacePath(logical, "."); err != nil {
+			return ctx, err
+		}
+		prepared := context.WithValue(ctx, workspaceKey{}, preparedWorkspace{logical, dir})
+		if e := a.mountTaskArtifacts(prepared, t, dir); e != nil {
+			return ctx, e
+		}
+		return prepared, nil
 	}
-	if w.PatchArtifactID != "" {
-		return ctx, protocol.Err("UNSUPPORTED_PRECONDITION", "patch artifact transfer is not installed")
-	}
+
 	root, e := a.resolveWorkspacePath(w.RootDir, ".")
 	if e != nil {
 		return ctx, e
@@ -222,17 +250,35 @@ func (a *Agent) prepareTask(ctx context.Context, t protocol.TaskEnvelope) (conte
 		return ctx, protocol.Err("WORKSPACE_MISMATCH", "Git HEAD does not match expected_git_head")
 	}
 	status, e := gitOutput(ctx, root, "status", "--porcelain", "--untracked-files=all")
-	if e != nil || status != "" {
+	if e != nil || (status != "" && w.PatchArtifactID == "") {
 		return ctx, protocol.Err("WORKSPACE_MISMATCH", "working tree must be clean including untracked files")
 	}
 	dir := filepath.Join(a.taskDir(t.TaskID), "workspace")
 	if e = os.MkdirAll(filepath.Dir(dir), 0700); e != nil {
 		return ctx, e
 	}
+	if _, err := os.Stat(dir); err == nil {
+		if e = a.cleanupTaskWorkspace(t); e != nil {
+			return ctx, e
+		}
+	}
 	if _, e = gitOutput(ctx, root, "worktree", "add", "--detach", dir, w.ExpectedGitHead); e != nil {
 		return ctx, protocol.Err("WORKSPACE_MISMATCH", e.Error())
 	}
-	return context.WithValue(ctx, workspaceKey{}, preparedWorkspace{w.RootDir, dir}), nil
+	if w.PatchArtifactID != "" {
+		patch, err := a.downloadArtifact(ctx, t, w.PatchArtifactID, "")
+		if err != nil {
+			return ctx, err
+		}
+		if _, err = gitOutput(ctx, dir, "apply", "--binary", "--index", patch); err != nil {
+			return ctx, protocol.Err("WORKSPACE_MISMATCH", err.Error())
+		}
+	}
+	prepared := context.WithValue(ctx, workspaceKey{}, preparedWorkspace{w.RootDir, dir})
+	if e = a.mountTaskArtifacts(prepared, t, dir); e != nil {
+		return ctx, e
+	}
+	return prepared, nil
 }
 func (a *Agent) allowedProgram(program string) (string, error) {
 	key := program
@@ -275,3 +321,24 @@ func hashFile(ctx context.Context, f *os.File) (string, error) {
 }
 func nowUTC() time.Time                            { return time.Now().UTC() }
 func marshalResult(v any) (json.RawMessage, error) { b, e := json.Marshal(v); return b, e }
+
+// Input mount paths are relative to the same directory used by process.exec.
+func (a *Agent) mountTaskArtifacts(ctx context.Context, t protocol.TaskEnvelope, root string) error {
+	if t.Capability.ID == "process.exec" {
+		var in struct {
+			CWD string `json:"cwd"`
+		}
+		if e := json.Unmarshal(t.Input, &in); e != nil {
+			return e
+		}
+		dir, e := a.processDir(ctx, in.CWD)
+		if e != nil {
+			return e
+		}
+		if e = os.MkdirAll(dir, 0700); e != nil {
+			return e
+		}
+		root = dir
+	}
+	return a.mountArtifacts(ctx, t, root)
+}

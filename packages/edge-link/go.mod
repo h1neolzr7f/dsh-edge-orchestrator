@@ -10,3 +10,7 @@ require (
 require github.com/Masterminds/semver/v3 v3.3.1 // indirect
 
 replace github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol => ./../protocol
+
+require github.com/h1neolzr7f/dsh-edge-orchestrator/packages/artifact v0.0.0
+
+replace github.com/h1neolzr7f/dsh-edge-orchestrator/packages/artifact => ../artifact

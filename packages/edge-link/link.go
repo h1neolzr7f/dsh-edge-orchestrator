@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/coder/websocket"
+	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/artifact"
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol"
 	"net/http"
 	"net/url"
@@ -37,7 +38,7 @@ func Dial(ctx context.Context, endpoint, token string, client *http.Client) (*Co
 	default:
 		return nil, fmt.Errorf("TLS https/wss endpoint required")
 	}
-	ws, _, e := websocket.Dial(ctx, u.String(), &websocket.DialOptions{HTTPClient: client, HTTPHeader: http.Header{"Authorization": []string{"Bearer " + token}}})
+	ws, _, e := websocket.Dial(ctx, u.String(), &websocket.DialOptions{HTTPClient: artifact.CredentialHTTP(client), HTTPHeader: http.Header{"Authorization": []string{"Bearer " + token}}})
 	if e != nil {
 		return nil, e
 	}

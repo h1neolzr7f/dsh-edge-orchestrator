@@ -6,7 +6,7 @@ DSH Edge Orchestrator 是围绕 DSH Go 建设的跨设备 Agent 编排系统。�
 
 它不是远程桌面，也不是 SSH 管理面板。核心抽象是：**设备是执行节点，能力是可组合工具，任务是持久化工作单元，编排器负责跨设备协作。**
 
-> 当前状态：Phase 2 真实执行闭环。已实现 Go Coordinator、Worker、CLI、授权工作区、真实进程/文件/Git 能力、磁盘日志及恢复。见 [Phase 2 运行指南](docs/PHASE2_QUICKSTART.md)。
+> 当前状态：V1 运行时与 DSH 接入包已实现。包含可续传产物、隔离补丁执行、审批/动态配对、8个 Cordis 工具、Dart 状态同步与 Flutter 聊天卡片。见 [V1 运行指南](docs/V1_QUICKSTART.md) 与 [完整验证报告](reports/V1_FULL_VALIDATION.md)。接入包已测试，尚未构建修改版上游 APK。
 
 ## 重要架构决定：不把 DS Harness Remote 作为核心通信依赖
 
@@ -27,10 +27,10 @@ DSH Edge Orchestrator 是围绕 DSH Go 建设的跨设备 Agent 编排系统。�
 ## 现在可以运行
 
 ```bash
-bash scripts/demo-phase2.sh
+bash scripts/demo-v1-full.sh
 ```
 
-一个 Coordinator、两个真实 Worker 进程、两前置一汇总的任务 DAG；支持任务去重、断线补传、Coordinator 重启恢复、全局事件游标及暂停后续调度。可运行 process.exec / cancel、filesystem.read / write、git.inspect，并由 report.aggregate 汇总；完整 V1 范围见下文。
+一个 HTTPS Coordinator、两台动态配对 Worker，执行带真实补丁的并行单元测试与 Git diff，将 JUnit 产物挂载给下游任务汇总。演示同时验证审批、产物完整性和实际执行时间重叠。旧 Phase2 指南和脚本保留用于基础回归。
 
 ## V1 要交付什么
 

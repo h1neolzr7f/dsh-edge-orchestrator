@@ -1,0 +1,16 @@
+name: dsh_flutter_ui
+description: Embeddable Fleet cards for an existing DSH chat message stream.
+version: 1.0.0
+publish_to: none
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  edge_link_dart:
+    path: ../../packages/edge-link-dart
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+flutter:
+  uses-material-design: true

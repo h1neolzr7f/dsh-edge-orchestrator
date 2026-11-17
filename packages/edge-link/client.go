@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/artifact"
 	"github.com/h1neolzr7f/dsh-edge-orchestrator/packages/protocol"
 	"io"
 	"net/http"
@@ -46,7 +47,7 @@ func (c *Client) request(ctx context.Context, method, path string, input, output
 	}
 	r.Header.Set("Authorization", "Bearer "+c.Token)
 	r.Header.Set("Content-Type", "application/json")
-	res, e := c.HTTP.Do(r)
+	res, e := artifact.CredentialHTTP(c.HTTP).Do(r)
 	if e != nil {
 		return e
 	}

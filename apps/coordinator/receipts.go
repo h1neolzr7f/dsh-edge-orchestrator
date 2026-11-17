@@ -73,7 +73,7 @@ func (s *Server) RecordTaskAccepted(device string, rec protocol.TaskReceipt) err
 	return tx.Commit()
 }
 func (s *Server) queueReconcileLocked(device string) error {
-	rows, e := s.db.Query(`SELECT id,payload FROM tasks WHERE status IN ('accepted','running','waiting_approval')`)
+	rows, e := s.db.Query(`SELECT id,payload FROM tasks WHERE status IN ('accepted','running')`)
 	if e != nil {
 		return e
 	}

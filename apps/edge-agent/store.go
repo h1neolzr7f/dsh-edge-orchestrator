@@ -99,6 +99,10 @@ func appendEvent(tx *sql.Tx, device string, t protocol.TaskEnvelope, kind string
 func (a *Agent) claim(t protocol.TaskEnvelope) (bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	// Shutdown leaves accepted preflight recoverable; no started event is emitted.
+	if a.closed || a.ctx.Err() != nil {
+		return false, nil
+	}
 	tx, e := a.db.Begin()
 	if e != nil {
 		return false, e
@@ -121,6 +125,12 @@ func (a *Agent) claim(t protocol.TaskEnvelope) (bool, error) {
 		}
 		return false, tx.Commit()
 	}
+	if t.Deadline != nil && !time.Now().Before(*t.Deadline) {
+		if e = appendEvent(tx, a.cfg.DeviceID, t, "task.failed", protocol.EventPayload{Error: &protocol.Error{Code: "DEADLINE_EXCEEDED", Message: "task deadline exceeded during preflight"}}, "failed"); e != nil {
+			return false, e
+		}
+		return false, tx.Commit()
+	}
 	if _, e = tx.Exec(`UPDATE local_task_ledger SET execution_count=execution_count+1 WHERE id=?`, t.TaskID); e != nil {
 		return false, e
 	}
@@ -132,6 +142,12 @@ func (a *Agent) claim(t protocol.TaskEnvelope) (bool, error) {
 func (a *Agent) finish(t protocol.TaskEnvelope, result json.RawMessage, runErr error, cancelled bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	cancelled = cancelled || a.cancelled[t.TaskID]
+	// A verified persistent runner or completed exit record survives a parent
+	// stop even if shutdown won after execution returned but before this commit.
+	if t.Capability.ID == "process.exec" && a.processDetachedLocked(t) && a.canResumeProcess(t) {
+		return errAgentDetached
+	}
 	tx, e := a.db.Begin()
 	if e != nil {
 		return e
@@ -261,6 +277,42 @@ func (a *Agent) recoverTasks() ([]protocol.TaskEnvelope, error) {
 		}
 		if e = a.finish(t, nil, protocol.Err("interrupted_by_restart", "accepted task is never automatically re-executed"), false); e != nil {
 			return nil, e
+		}
+	}
+	// Retain terminal rows as the durable cleanup queue. Missing checkouts are
+	// skipped; a transient removal error leaves the row available next restart.
+	a.mu.Lock()
+	cleanupRows, err := a.db.Query(`SELECT payload FROM local_task_ledger WHERE status IN ('succeeded','failed','cancelled','rejected')`)
+	if err != nil {
+		a.mu.Unlock()
+		return nil, err
+	}
+	var cleanup []protocol.TaskEnvelope
+	for cleanupRows.Next() {
+		var raw string
+		if err = cleanupRows.Scan(&raw); err != nil {
+			break
+		}
+		var t protocol.TaskEnvelope
+		if err = json.Unmarshal([]byte(raw), &t); err != nil {
+			break
+		}
+		cleanup = append(cleanup, t)
+	}
+	if err == nil {
+		err = cleanupRows.Err()
+	}
+	cleanupRows.Close()
+	a.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range cleanup {
+		if _, err = os.Stat(filepath.Join(a.taskDir(t.TaskID), "workspace")); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err = a.cleanupTaskWorkspace(t); err != nil {
+			a.setError(err)
 		}
 	}
 	return accepted, nil
